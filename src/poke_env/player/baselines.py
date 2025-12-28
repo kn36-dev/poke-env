@@ -417,3 +417,138 @@ class SimpleHeuristicsPlayer(Player):
             return joined_orders[0]
         else:
             return DoubleBattleOrder(orders[0], DefaultBattleOrder())
+
+
+class AggressivePlayer(Player):
+    """Aggressive decision tree.
+
+    Prioritises high expected damage and setup moves that increase offensive
+    potential. Falls back to a random move if nothing obvious is available.
+    """
+
+    def choose_move(self, battle: AbstractBattle):
+        if self.format_is_doubles:
+            # For doubles, fall back to RandomPlayer behavior for now
+            return RandomPlayer.choose_move(self, battle)  # type: ignore
+
+        # Singles
+        if battle.available_moves:
+            # Score moves by base power * accuracy * expected_hits * matchup
+            def score_move(m: Move):
+                matchup = battle.opponent_active_pokemon.damage_multiplier(m.type)
+                acc = getattr(m, "accuracy", 1.0) or 1.0
+                return (m.base_power or 0) * acc * m.expected_hits * matchup
+
+            best = max(battle.available_moves, key=score_move)
+            return self.create_order(best)
+
+        # If no moves available, try a switch
+        if battle.available_switches:
+            # prefer Pokemon instances when switching
+            candidates: List[Pokemon] = [
+                s for s in battle.available_switches if isinstance(s, Pokemon)
+            ]
+            if candidates:
+                return self.create_order(random.choice(candidates))
+            return self.create_order(random.choice(battle.available_switches))
+
+        return DefaultBattleOrder()
+
+
+class DefensivePlayer(Player):
+    """Defensive decision tree.
+
+    Prioritises recovery and protection moves, and switches to counter poor
+    matchups. Otherwise selects safe / supportive moves.
+    """
+
+    RECOVERY_MOVES = {
+        "recover",
+        "softboiled",
+        "roost",
+        "wish",
+        "healorder",
+        "synthesis",
+        "moonlight",
+        "horecl",
+    }
+
+    def choose_move(self, battle: AbstractBattle):
+        if self.format_is_doubles:
+            return RandomPlayer.choose_move(self, battle)  # type: ignore
+
+        # Prefer recovery/protect moves
+        for m in battle.available_moves:
+            if getattr(m, "id", "") in self.RECOVERY_MOVES:
+                return self.create_order(m)
+
+        # If matchup is poor, try to switch to a better mon
+        active = battle.active_pokemon
+        opp = battle.opponent_active_pokemon
+        if active and opp:
+            # use a small internal estimator to decide whether to switch
+            try:
+                score = self._estimate_matchup(active, opp)
+            except Exception:
+                score = 0
+
+            if score < -0.5 and battle.available_switches:
+                # Guard against typechecker confusion: ensure switch candidates
+                # are Pokemon instances before passing to _estimate_matchup.
+                candidates: List[Pokemon] = [
+                    s for s in battle.available_switches if isinstance(s, Pokemon)
+                ]
+                if candidates:
+                    best_switch = max(
+                        candidates, key=lambda s: self._estimate_matchup(s, opp)
+                    )
+                    return self.create_order(best_switch)
+
+        # Otherwise pick the move with best defensive utility (status / stall)
+        status_moves = [
+            m for m in battle.available_moves if m.category == MoveCategory.STATUS
+        ]
+        if status_moves:
+            return self.create_order(random.choice(status_moves))
+
+        # Fallback: best damaging move
+        if battle.available_moves:
+            best = max(
+                battle.available_moves,
+                key=lambda m: (m.base_power or 0) * (m.expected_hits or 1),
+            )
+            return self.create_order(best)
+
+        if battle.available_switches:
+            candidates: List[Pokemon] = [
+                s for s in battle.available_switches if isinstance(s, Pokemon)
+            ]
+            if candidates:
+                return self.create_order(random.choice(candidates))
+            return self.create_order(random.choice(battle.available_switches))
+
+        return DefaultBattleOrder()
+
+    def _estimate_matchup(self, mon: Pokemon, opponent: Pokemon):
+        """Small heuristic to estimate matchup advantage for DefensivePlayer.
+
+        Positive means favorable for `mon`, negative means unfavorable.
+        """
+        try:
+            score = max(
+                [opponent.damage_multiplier(t) for t in mon.types if t is not None]
+            )
+            score -= max(
+                [mon.damage_multiplier(t) for t in opponent.types if t is not None]
+            )
+            # speed advantage adds small bonus
+            if mon.base_stats["spe"] > opponent.base_stats["spe"]:
+                score += 0.1
+            elif opponent.base_stats["spe"] > mon.base_stats["spe"]:
+                score -= 0.1
+            # health fraction contribution
+            score += mon.current_hp_fraction * 0.2
+            score -= opponent.current_hp_fraction * 0.2
+            return score
+        except Exception:
+            return 0

@@ -48,6 +48,7 @@ class TeambuilderPokemon:
         hiddenpowertype: Optional[str] = None,
         gmax: Optional[bool] = None,
         tera_type: Optional[str] = None,
+        fusion_species: Optional[str] = None,
     ):
         self.nickname = nickname
         self.species = species
@@ -61,6 +62,7 @@ class TeambuilderPokemon:
         self.hiddenpowertype = hiddenpowertype
         self.gmax = gmax
         self.tera_type = tera_type
+        self.fusion_species = fusion_species
         self.evs = evs if evs is not None else [0] * 6
         self.ivs = ivs if ivs is not None else [31] * 6
 
@@ -110,7 +112,7 @@ class TeambuilderPokemon:
     @property
     def packed(self) -> str:
         self._prepare_for_formatting()
-        return "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s%s" % (
+        return "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s%s,,,,,,%s" % (
             self.nickname or "",
             to_id_str(self.species) if self.species else "",
             to_id_str(self.item) if self.item else "",
@@ -124,6 +126,9 @@ class TeambuilderPokemon:
             self.level or "",
             self.happiness or "",
             self.packed_endstring,
+            (
+                to_id_str(self.fusion_species) if self.fusion_species else ""
+            ),  # The new field
         )
 
     def _prepare_for_formatting(self):
@@ -158,12 +163,14 @@ class TeambuilderPokemon:
             raw_shiny,
             raw_level,
             endstring,
+            # raw_fusion_segment,  # This will contain the commas
         ) = packed_mon.split("|")
 
         gmax = False
         tera_type = None
         hiddenpowertype = None
         happiness = None
+        fusion_species = None
 
         if endstring:
             split_endstring = endstring.split(",")
@@ -176,9 +183,11 @@ class TeambuilderPokemon:
             elif split_endstring[-1] == "G":
                 gmax = True
             elif split_endstring[-1] != "":
-                tera_type = split_endstring[-1]
+                fusion_species = split_endstring[-1]
+                # tera_type = split_endstring[-1]
             elif len(split_endstring) >= 3:
                 hiddenpowertype = split_endstring[-2]
+            # elif len(split_endstring) == 7:
 
         nickname = raw_nickname or None
         species = raw_species or None
@@ -229,6 +238,7 @@ class TeambuilderPokemon:
             hiddenpowertype=hiddenpowertype,
             gmax=gmax,
             tera_type=tera_type,
+            fusion_species=fusion_species or None,
         )
 
     @staticmethod
@@ -287,6 +297,10 @@ class TeambuilderPokemon:
             elif line.startswith("Tera Type: "):
                 tera_type = line.replace("Tera Type: ", "").strip()
                 mon.tera_type = tera_type
+            elif line.startswith("Fusion: "):
+                fusion_species = line.replace("Fusion: ", "").strip()
+                print(f"What is fusion_species:\n{fusion_species}")
+                mon.fusion_species = fusion_species
             else:
                 if "@" in line:
                     mon_info, item = line.split(" @ ")
@@ -307,5 +321,5 @@ class TeambuilderPokemon:
                             split_mon_info = split_mon_info[:i]
                             break
                 mon.nickname = " ".join(split_mon_info)
-
+        print(f"Resultant mon:\n{mon}")
         return mon
