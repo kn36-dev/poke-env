@@ -181,6 +181,7 @@ class Player(ABC):
         :rtype: AbstractBattle
         """
         # We check that the battle has the correct format
+        # print(f"Is format doubles?${self.format_is_doubles}")
         if split_message[1] == self._format and len(split_message) >= 2:
             # Battle initialisation
             battle_tag = "-".join(split_message)[1:]
@@ -748,6 +749,15 @@ class Player(ABC):
             "vgc" in format_lowercase
             or "double" in format_lowercase
             or "metronome" in format_lowercase
+            or "nationaldexgeneration9" in format_lowercase
+            or "nationaldexgeneration8" in format_lowercase
+            or "nationaldexgeneration7" in format_lowercase
+            or "nationaldexgeneration6" in format_lowercase
+            or "nationaldexgeneration5" in format_lowercase
+            or "nationaldexgeneration4" in format_lowercase
+            or "nationaldexgeneration3" in format_lowercase
+            or "nationaldexgeneration2" in format_lowercase
+            or "nationaldexgeneration1" in format_lowercase
         )
 
     @property

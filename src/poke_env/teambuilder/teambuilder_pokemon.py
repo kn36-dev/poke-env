@@ -299,7 +299,7 @@ class TeambuilderPokemon:
                 mon.tera_type = tera_type
             elif line.startswith("Fusion: "):
                 fusion_species = line.replace("Fusion: ", "").strip()
-                print(f"What is fusion_species:\n{fusion_species}")
+                # print(f"What is fusion_species:\n{fusion_species}")
                 mon.fusion_species = fusion_species
             else:
                 if "@" in line:
@@ -321,5 +321,5 @@ class TeambuilderPokemon:
                             split_mon_info = split_mon_info[:i]
                             break
                 mon.nickname = " ".join(split_mon_info)
-        print(f"Resultant mon:\n{mon}")
+        # print(f"Resultant mon:\n{mon}")
         return mon
