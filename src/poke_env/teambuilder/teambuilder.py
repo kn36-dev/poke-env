@@ -44,7 +44,7 @@ class Teambuilder(ABC):
             if ps_mon == "":
                 continue
             mons.append(TeambuilderPokemon.from_showdown(ps_mon))
-        print(f"All mons:\n{mons}")
+        # print(f"All mons:\n{mons}")
         return mons
 
     @staticmethod

@@ -17,16 +17,17 @@ SERVER_CONFIG = ServerConfiguration(
 # valid Showdown team text (or a packed team string). Passing a string to the
 # `team` parameter of `RandomPlayer` will wrap it into a ConstantTeambuilder.
 SAMPLE_TEAM = """
-Lucaninja (Lucario) @ Life Orb  
+Lucario/Greninja (Lucario) (F) @ Life Orb  
 Ability: Protean  
+Level: 99  
 Fusion: Greninja  
 EVs: 252 SpA / 4 SpD / 252 Spe  
 Timid Nature  
 IVs: 0 Atk  
-- Aura Sphere  
-- Ice Beam  
-- Dark Pulse  
 - Water Shuriken  
+- Ice Beam  
+- Aura Sphere  
+- Sludge Wave  
 
 Muzing (Muk) @ Black Sludge  
 Ability: Levitate  

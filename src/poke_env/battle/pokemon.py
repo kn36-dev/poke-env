@@ -54,6 +54,7 @@ class Pokemon:
         "_type_1",
         "_type_2",
         "_weightkg",
+        "_fusion_partner",
     )
 
     def __init__(
@@ -511,17 +512,35 @@ class Pokemon:
         else:
             self._shiny = False
 
-        split_details = details.split(", ")
+        # split_details = details.split(", ")
+
+        # Split the details into a list
+        raw_split_details = details.split(", ")
+        split_details = []
+
+        # Minimal Change: Filter out custom fusion/tera data
+        # but store them in the object first
+        for detail in raw_split_details:
+            if detail.startswith("fusion: "):
+                self._fusion_partner = detail.replace("fusion: ", "")
+            elif detail.startswith("tera: "):
+                self._terastallized_type = PokemonType.from_name(detail[6:])
+            else:
+                # This keeps only Species, Level, and Gender in the list
+                split_details.append(detail)
 
         gender = None
         level = None
 
-        for split_detail in split_details:
-            if split_detail.startswith("tera:"):
-                self._terastallized_type = PokemonType.from_name(split_detail[5:])
+        # for split_detail in split_details:
+        #     if split_detail.startswith("fusion: "):
+        #         self._fusion_partner = split_detail.replace("fusion: ", "")
+        #         continue
+        #     if split_detail.startswith("tera:"):
+        #         self._terastallized_type = PokemonType.from_name(split_detail[5:])
 
-                split_details.remove(split_detail)
-                break
+        #         split_details.remove(split_detail)
+        #         break
 
         if len(split_details) == 3:
             species, level, gender = split_details
