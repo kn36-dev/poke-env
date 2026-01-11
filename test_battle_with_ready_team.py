@@ -6,6 +6,10 @@ import asyncio
 import inspect
 import argparse
 import time
+import random
+from typing import List
+
+from teams_config import ALL_TEAMS
 
 # ServerConfiguration for a local Showdown running on localhost:8000
 SERVER_CONFIG = ServerConfiguration(
@@ -13,85 +17,20 @@ SERVER_CONFIG = ServerConfiguration(
     authentication_url="https://play.pokemonshowdown.com/action.php?",
 )
 
-# Example Showdown-formatted team (human-readable). You can replace this with any
-# valid Showdown team text (or a packed team string). Passing a string to the
-# `team` parameter of `RandomPlayer` will wrap it into a ConstantTeambuilder.
-SAMPLE_TEAM = """
-Lucario/Greninja (Lucario) (F) @ Life Orb  
-Ability: Protean  
-Level: 99  
-Fusion: Greninja  
-EVs: 252 SpA / 4 SpD / 252 Spe  
-Timid Nature  
-IVs: 0 Atk  
-- Water Shuriken  
-- Ice Beam  
-- Aura Sphere  
-- Sludge Wave  
 
-Muzing (Muk) @ Black Sludge  
-Ability: Levitate  
-Fusion: Weezing  
-EVs: 252 HP / 4 SpA / 252 SpD  
-Calm Nature  
-IVs: 0 Atk  
-- Acid Spray  
-- Flamethrower  
-- Clear Smog  
-- Pain Split  
+class RandomTeambuilder(Teambuilder):
+    def __init__(self, teams: List[str]):
+        # Convert all human-readable teams to packed format once at startup
+        self.packed_teams = [
+            self.join_team(self.parse_showdown_team(t)) for t in teams if t.strip()
+        ]
 
-Galletta (Gallade) @ Lum Berry  
-Ability: Justified  
-Fusion: Meloetta  
-EVs: 80 HP / 252 Atk / 176 Spe  
-Jolly Nature  
-- Psycho Cut  
-- Close Combat  
-- Rock Slide  
-- Protect  
+    def yield_team(self) -> str:
+        # This is called by the Player object every time a new battle starts
+        return random.choice(self.packed_teams)
 
-Whimsikou (Whimsicott) @ Focus Sash  
-Ability: Prankster  
-Fusion: Raikou  
-EVs: 100 HP / 252 SpA / 156 Spe  
-Timid Nature  
-- Beat Up  
-- Tailwind  
-- Encore  
-- Volt Switch  
 
-Chandelzone (Chandelure) @ Mental Herb  
-Ability: Magnet Pull  
-Fusion: Magnezone  
-EVs: 252 HP / 252 SpA / 4 SpD  
-Quiet Nature  
-IVs: 0 Atk  
-- Trick Room  
-- Heat Wave  
-- Thunderbolt  
-- Protect  
-
-Metanite (Metagross) @ Sitrus Berry  
-Ability: Clear Body  
-Fusion: Dragonite  
-EVs: 252 HP / 252 Atk / 4 SpD  
-Brave Nature  
-- Meteor Mash  
-- Earthquake  
-- Tailwind  
-- Protect  
-"""
-
-# Convert SAMPLE_TEAM (export format) to packed format once and reuse for both
-# agents. Teambuilder.parse_showdown_team and join_team are used so conversion
-# matches the library's behavior.
-PACKED_SAMPLE_TEAM = (
-    Teambuilder.join_team(Teambuilder.parse_showdown_team(SAMPLE_TEAM))
-    if SAMPLE_TEAM.strip()
-    else ""
-)
-
-print(f"DEBUG: Packed Team String:\n{PACKED_SAMPLE_TEAM}")
+# print(f"DEBUG: Packed Team String:\n{PACKED_SAMPLE_TEAM}")
 
 
 def main():
@@ -103,7 +42,7 @@ def main():
         help=(
             "auto: run two agents against each other (default). "
             "accept: run a single agent and accept a human challenge. "
-            "queue: run a single agent and queue for ladder games (gen8randombattle)."
+            "queue: run a single agent and queue for ladder games (gen9nationaldexgeneration9)."
         ),
     )
     parser.add_argument(
@@ -118,10 +57,12 @@ def main():
     acct1 = AccountConfiguration("custom_bot", None)
     acct2 = AccountConfiguration("random_bot", None)
 
+    teambuilder = RandomTeambuilder(ALL_TEAMS)
+
     p1 = RandomPlayer(
         account_configuration=acct1,
         battle_format=fmt,
-        team=PACKED_SAMPLE_TEAM,
+        team=teambuilder,
         server_configuration=SERVER_CONFIG,
     )
 
@@ -130,51 +71,9 @@ def main():
         p2 = RandomPlayer(
             account_configuration=acct2,
             battle_format=fmt,
-            team=PACKED_SAMPLE_TEAM,
+            team=teambuilder,
             server_configuration=SERVER_CONFIG,
         )
-
-    # How long (seconds) to wait before making each decision.
-    # Increase this value to make battles run slower so they don't finish instantly
-    # when running against a local fast server.
-    DECISION_DELAY = 0.6
-
-    def _add_decision_delay(player, delay: float):
-        """Monkey-patch a player to await `delay` seconds before choosing moves/switches.
-
-        This handles both sync and async implementations of the underlying methods.
-        """
-
-        # Wrap choose_move
-        if hasattr(player, "choose_move"):
-            orig_choose_move = player.choose_move
-
-            async def _choose_move_delayed(battle):
-                await asyncio.sleep(delay)
-                choice = orig_choose_move(battle)
-                if inspect.isawaitable(choice):
-                    return await choice
-                return choice
-
-            player.choose_move = _choose_move_delayed
-
-        # Wrap choose_switch (some players may not implement it explicitly)
-        if hasattr(player, "choose_switch"):
-            orig_choose_switch = player.choose_switch
-
-            async def _choose_switch_delayed(battle):
-                await asyncio.sleep(delay)
-                choice = orig_choose_switch(battle)
-                if inspect.isawaitable(choice):
-                    return await choice
-                return choice
-
-            player.choose_switch = _choose_switch_delayed
-
-    # Apply delay to players so games are paced
-    _add_decision_delay(p1, DECISION_DELAY)
-    if p2 is not None:
-        _add_decision_delay(p2, DECISION_DELAY)
 
     try:
         # Run according to selected mode
