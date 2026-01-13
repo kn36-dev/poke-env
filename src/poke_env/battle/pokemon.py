@@ -523,9 +523,9 @@ class Pokemon:
         for detail in raw_split_details:
             if detail.startswith("fusion: "):
                 self._fusion_partner = detail.replace("fusion: ", "")
-                print(
-                    f"[DEBUG] Found Fusion: Head={self._species}, Body={self._fusion_partner}"
-                )
+                # print(
+                #     f"[DEBUG] Found Fusion: Head={self._species}, Body={self._fusion_partner}"
+                # )
             elif detail.startswith("tera: "):
                 self._terastallized_type = PokemonType.from_name(detail[6:])
             else:
@@ -650,7 +650,7 @@ class Pokemon:
         )
 
         # Debug print for the logs to confirm the bot 'sees' the change
-        print(f"[FUSION] {self._species}/{body_id} -> Result: {self.types}")
+        # print(f"[FUSION] {self._species}/{body_id} -> Result: {self.types}")
 
     def update_from_request(self, request_pokemon: Dict[str, Any]):
         self._active = request_pokemon["active"]

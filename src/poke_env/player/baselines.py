@@ -67,6 +67,8 @@ class BaselinePlayer(Player):
         return best_order
 
     def _choose_doubles_move(self, battle: DoubleBattle) -> BattleOrder:
+        # Check if this is a force-switch turn (e.g., after a KO)
+        is_force_switch = any(battle.force_switch)
         orders: List[Optional[BattleOrder]] = [None, None]
 
         # Iterate through both active pokemon (0 and 1)
@@ -74,6 +76,24 @@ class BaselinePlayer(Player):
             attacker = battle.active_pokemon[i]
             if not attacker or attacker.fainted:
                 orders[i] = DefaultBattleOrder()
+                continue
+
+            # 2. Handle Force-Switch Phase
+            if is_force_switch:
+                if battle.force_switch[i]:
+                    # This slot MUST switch
+                    if battle.available_switches[i]:
+                        best_switch = max(
+                            battle.available_switches[i],
+                            key=lambda p: p.current_hp_fraction,
+                        )
+                        orders[i] = self.create_order(best_switch)
+                    else:
+                        # Should not happen unless fainted and no backups
+                        orders[i] = DefaultBattleOrder()
+                else:
+                    # This slot stays on the field; send a Pass order
+                    orders[i] = PassBattleOrder()
                 continue
 
             best_move_order = DefaultBattleOrder()
