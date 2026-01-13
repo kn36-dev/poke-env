@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 from poke_env.battle.effect import Effect
 from poke_env.battle.field import Field
@@ -523,6 +523,9 @@ class Pokemon:
         for detail in raw_split_details:
             if detail.startswith("fusion: "):
                 self._fusion_partner = detail.replace("fusion: ", "")
+                print(
+                    f"[DEBUG] Found Fusion: Head={self._species}, Body={self._fusion_partner}"
+                )
             elif detail.startswith("tera: "):
                 self._terastallized_type = PokemonType.from_name(detail[6:])
             else:
@@ -564,6 +567,90 @@ class Pokemon:
 
         if species != self._species:
             self._update_from_pokedex(species)
+
+        if self._fusion_partner:
+            self._apply_fusion()
+
+    def _apply_fusion(self):
+        """
+        Combines base species (Head) and fusion partner (Body) data.
+        Updates types and base stats.
+        """
+
+        body_id = to_id_str(self._fusion_partner)
+        if body_id not in self._data.pokedex:
+            return
+
+        head_data = self._data.pokedex[self._species]
+        body_data = self._data.pokedex[body_id]
+
+        # --- STATS CALCULATION (Exact translation from _internalGetBaseStats) ---
+        # Head provides 2/3 HP, SpA, SpD. Body provides 1/3.
+        # Body provides 2/3 Atk, Def, Spe. Head provides 1/3.
+        h_stats = head_data["baseStats"]
+        b_stats = body_data["baseStats"]
+
+        self._base_stats["hp"] = int((2 * h_stats["hp"] / 3) + (1 * b_stats["hp"] / 3))
+        self._base_stats["spa"] = int(
+            (2 * h_stats["spa"] / 3) + (1 * b_stats["spa"] / 3)
+        )
+        self._base_stats["spd"] = int(
+            (2 * h_stats["spd"] / 3) + (1 * b_stats["spd"] / 3)
+        )
+
+        self._base_stats["atk"] = int(
+            (1 * h_stats["atk"] / 3) + (2 * b_stats["atk"] / 3)
+        )
+        self._base_stats["def"] = int(
+            (1 * h_stats["def"] / 3) + (2 * b_stats["def"] / 3)
+        )
+        self._base_stats["spe"] = int(
+            (1 * h_stats["spe"] / 3) + (2 * b_stats["spe"] / 3)
+        )
+
+        # --- TYPING CALCULATION (Corrected "Bird" Logic) ---
+        head_types = head_data["types"]
+        body_types = body_data["types"]
+
+        h_primary = head_types[0]
+        h_secondary = head_types[1] if len(head_types) > 1 else None
+
+        # RULE: Normal/Flying Override (e.g., Pidgey)
+        # Priority: If Normal/Flying, use Flying. Otherwise, use Primary.
+        is_normal_flying = h_primary == "Normal" and h_secondary == "Flying"
+        effective_head_type = h_secondary if is_normal_flying else h_primary
+
+        b_primary = body_types[0]
+        b_secondary = body_types[1] if len(body_types) > 1 else None
+
+        final_type_1 = effective_head_type
+        final_type_2 = None
+
+        if b_secondary:
+            # If body secondary is different from head type, use it
+            if b_secondary != effective_head_type:
+                final_type_2 = b_secondary
+            else:
+                # Fallback to body primary if secondary matches head
+                final_type_2 = b_primary
+        elif b_primary != effective_head_type:
+            # If body is mono-type and different from head
+            final_type_2 = b_primary
+
+        # Discrepancy Fix: Fallback for mono-type results
+        if final_type_2 is None and not (b_primary != effective_head_type):
+            # If we didn't find a second type, TS logic implies using head primary
+            # unless the effective head type already covered it.
+            pass
+
+        # Type Safety Fix: Explicit cast to string for from_name
+        self._type_1 = PokemonType.from_name(str(final_type_1))
+        self._type_2 = (
+            PokemonType.from_name(str(final_type_2)) if final_type_2 else None
+        )
+
+        # Debug print for the logs to confirm the bot 'sees' the change
+        print(f"[FUSION] {self._species}/{body_id} -> Result: {self.types}")
 
     def update_from_request(self, request_pokemon: Dict[str, Any]):
         self._active = request_pokemon["active"]

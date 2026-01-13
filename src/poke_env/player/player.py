@@ -55,7 +55,7 @@ class Player(ABC):
         battle_format: str = "gen9randombattle",
         log_level: Optional[int] = None,
         max_concurrent_battles: int = 1,
-        accept_open_team_sheet: bool = False,
+        accept_open_team_sheet: bool = True,
         save_replays: Union[bool, str] = False,
         server_configuration: ServerConfiguration = LocalhostServerConfiguration,
         start_timer_on_battle_start: bool = False,

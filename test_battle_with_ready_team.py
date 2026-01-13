@@ -1,4 +1,15 @@
-from poke_env.player import RandomPlayer
+from poke_env.player import (
+    RandomPlayer,
+    MaxBasePowerPlayer,
+    SimpleHeuristicsPlayer,
+    AggressivePlayer,
+    DefensivePlayer,
+    SetupSweeperPlayer,
+    SpeedControlPlayer,
+    WeatherWarriorPlayer,
+    DisruptorPlayer,
+    ChoiceTricksterPlayer,
+)
 from poke_env.ps_client.account_configuration import AccountConfiguration
 from poke_env.ps_client.server_configuration import ServerConfiguration
 from poke_env.teambuilder.teambuilder import Teambuilder
@@ -50,7 +61,20 @@ def main():
     )
     args = parser.parse_args()
 
-    fmt = "gen9nationaldexgeneration9"
+    player_types = [
+        RandomPlayer,
+        MaxBasePowerPlayer,
+        SimpleHeuristicsPlayer,
+        AggressivePlayer,
+        DefensivePlayer,
+        SetupSweeperPlayer,
+        SpeedControlPlayer,
+        WeatherWarriorPlayer,
+        DisruptorPlayer,
+        ChoiceTricksterPlayer,
+    ]
+
+    fmt = "gen9nationaldexgeneration9vgc"
 
     # Provide AccountConfiguration instances (username and optional password)
     # AccountConfiguration is a NamedTuple(username, password)
@@ -59,7 +83,10 @@ def main():
 
     teambuilder = RandomTeambuilder(ALL_TEAMS)
 
-    p1 = RandomPlayer(
+    p1_class = random.choice(player_types)
+    p2_class = random.choice(player_types)
+
+    p1 = p1_class(
         account_configuration=acct1,
         battle_format=fmt,
         team=teambuilder,
@@ -68,12 +95,15 @@ def main():
 
     p2 = None
     if args.mode == "auto":
-        p2 = RandomPlayer(
+        p2 = p2_class(
             account_configuration=acct2,
             battle_format=fmt,
             team=teambuilder,
             server_configuration=SERVER_CONFIG,
         )
+
+    # print(f"Matchup: {p1_class.__name__} vs {p2_class.__name__}")
+    print(f"Matchup: {p1_class.__name__}")
 
     try:
         # Run according to selected mode

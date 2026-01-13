@@ -1,5 +1,5 @@
 import random
-from typing import List, Tuple
+from typing import List, Tuple, cast, Optional, Union
 
 from poke_env.battle.abstract_battle import AbstractBattle
 from poke_env.battle.battle import Battle
@@ -17,6 +17,279 @@ from poke_env.player.battle_order import (
     SingleBattleOrder,
 )
 from poke_env.player.player import Player
+from poke_env.battle.pokemon_type import PokemonType
+
+
+class BaselinePlayer(Player):
+    """
+    A foundational class that handles the mechanical complexity of Singles vs Doubles.
+    Subclasses only need to implement `get_move_score`.
+    """
+
+    def choose_move(self, battle: AbstractBattle) -> BattleOrder:
+        if isinstance(battle, DoubleBattle):
+            return self._choose_doubles_move(battle)
+        elif isinstance(battle, Battle):
+            return self._choose_singles_move(battle)
+        else:
+            return DefaultBattleOrder()
+
+    def _choose_singles_move(self, battle: Battle) -> BattleOrder:
+        if not battle.active_pokemon:
+            return self.choose_random_move(battle)
+
+        best_score = -float("inf")
+        best_order = self.choose_random_move(battle)
+
+        # Evaluate Switches
+        if battle.available_switches:
+            for switch_mon in battle.available_switches:
+                score = self.get_switch_score(
+                    battle,
+                    switch_mon,
+                    battle.active_pokemon,
+                    battle.opponent_active_pokemon,
+                )
+                if score > best_score:
+                    best_score = score
+                    best_order = self.create_order(switch_mon)
+
+        # Evaluate Moves
+        if battle.available_moves and battle.opponent_active_pokemon:
+            for move in battle.available_moves:
+                score = self.get_move_score(
+                    battle, move, battle.active_pokemon, battle.opponent_active_pokemon
+                )
+                if score > best_score:
+                    best_score = score
+                    best_order = self.create_order(move)
+
+        return best_order
+
+    def _choose_doubles_move(self, battle: DoubleBattle) -> BattleOrder:
+        orders: List[Optional[BattleOrder]] = [None, None]
+
+        # Iterate through both active pokemon (0 and 1)
+        for i in range(2):
+            attacker = battle.active_pokemon[i]
+            if not attacker or attacker.fainted:
+                orders[i] = DefaultBattleOrder()
+                continue
+
+            best_move_order = DefaultBattleOrder()
+            best_score = -float("inf")
+
+            # If no moves, try to switch
+            if not battle.available_moves[i]:
+                if battle.available_switches[i]:
+                    best_switch = max(
+                        battle.available_switches[i],
+                        key=lambda p: p.current_hp_fraction,
+                    )
+                    orders[i] = self.create_order(best_switch)
+                else:
+                    orders[i] = DefaultBattleOrder()
+                continue
+
+            # Evaluate every move against every valid target
+            for move in battle.available_moves[i]:
+                # 1. Determine valid targets
+                possible_targets = []
+
+                # If move targets specific foe (normal single target moves)
+                if move.target in {Target.NORMAL, Target.ANY, Target.ADJACENT_FOE}:
+                    possible_targets = [
+                        battle.opponent_active_pokemon[0],
+                        battle.opponent_active_pokemon[1],
+                    ]
+                # If move targets all adjacent (Spread moves like Earthquake)
+                elif move.target in {Target.ALL_ADJACENT, Target.ALL_ADJACENT_FOES}:
+                    # We treat the "target" as the opponent slot 1 for API purposes, but calculate spread damage
+                    possible_targets = [battle.opponent_active_pokemon[0]]
+
+                for target in possible_targets:
+                    if not target or target.fainted:
+                        continue
+
+                    # Calculate Score
+                    current_score = self.get_move_score(battle, move, attacker, target)
+
+                    # FRIENDLY FIRE CHECK
+                    if move.target == Target.ALL_ADJACENT:
+                        # This move (e.g., Earthquake) hits our partner too!
+                        partner = battle.active_pokemon[1 if i == 0 else 0]
+                        if partner and not partner.fainted:
+                            # Estimate damage to partner
+                            ff_damage = self.estimate_damage(
+                                move, attacker, partner, battle
+                            )
+                            # Subtract massive penalty if it hurts partner significantly
+                            current_score -= ff_damage * 1.5
+
+                    if current_score > best_score:
+                        best_score = current_score
+                        # If targeting is required, specify it
+                        if move.target in {
+                            Target.NORMAL,
+                            Target.ANY,
+                            Target.ADJACENT_FOE,
+                        }:
+                            # Targets: 1, 2 are opponents. -1, -2 are allies.
+                            # poke-env usually takes the target object or index.
+                            # DoubleBattleOrder logic usually requires specifying target index explicitly.
+                            # Standard poke-env: 1 is opp1, 2 is opp2.
+                            target_idx = (
+                                1 if target == battle.opponent_active_pokemon[0] else 2
+                            )
+                            best_move_order = self.create_order(
+                                move, move_target=target_idx
+                            )
+                        else:
+                            best_move_order = self.create_order(move)
+
+            orders[i] = best_move_order
+
+        # Combine into DoubleBattleOrder
+        return DoubleBattleOrder(
+            cast(
+                Union[SingleBattleOrder, DefaultBattleOrder],
+                orders[0] or DefaultBattleOrder(),
+            ),
+            cast(
+                Union[SingleBattleOrder, DefaultBattleOrder],
+                orders[1] or DefaultBattleOrder(),
+            ),
+        )
+
+    def _get_target_from_index(
+        self, battle: DoubleBattle, idx: int
+    ) -> Optional[Pokemon]:
+        # Mapping: 1, 2 are opponents. -1, -2 are allies.
+        if idx == 1:
+            return battle.opponent_active_pokemon[0]
+        if idx == 2:
+            return battle.opponent_active_pokemon[1]
+        if idx == -1:
+            return battle.active_pokemon[1]
+        if idx == -2:
+            return battle.active_pokemon[0]
+        return None
+
+    def estimate_damage(
+        self,
+        move: Move,
+        attacker: Pokemon,
+        defender: Pokemon,
+        battle: AbstractBattle,  # Add battle here
+    ) -> float:
+        """
+        Robust damage estimation including OTS data (Items/Abilities).
+        """
+        if move.category == MoveCategory.STATUS:
+            return 0.0
+
+        # 1. Stats with Stat Changes
+        # Psyshock Check: Uses SpA vs Def
+        use_def_stat = "def"
+        # Initialize atk with a default to satisfy the 'unbound' warning
+        atk = 0.0
+
+        if move.id == "bodypress":
+            atk = attacker.stats["def"] or attacker.base_stats["def"]
+            use_def_stat = "def"
+        elif move.category == MoveCategory.SPECIAL:
+            atk = attacker.stats["spa"] or attacker.base_stats["spa"]
+            if move.id == "psyshock":
+                use_def_stat = "def"
+            else:
+                use_def_stat = "spd"
+        else:  # Physical
+            atk = attacker.stats["atk"] or attacker.base_stats["atk"]
+            use_def_stat = "def"
+
+        defense = defender.stats[use_def_stat] or 1  # Avoid division by zero
+
+        # 2. Ability Immunities (OTS Awareness)
+        # Levitate Check
+        if move.type == PokemonType.GROUND and defender.ability == "levitate":
+            return 0.0
+        # Flash Fire / Volt Absorb / etc.
+        if move.type == PokemonType.FIRE and defender.ability == "flashfire":
+            return 0.0
+        if move.type == PokemonType.ELECTRIC and defender.ability in [
+            "voltabsorb",
+            "lightningrod",
+            "motordrive",
+        ]:
+            return 0.0
+        if move.type == PokemonType.WATER and defender.ability in [
+            "waterabsorb",
+            "stormdrain",
+            "dryskin",
+        ]:
+            return 0.0
+        # Wonder Guard
+        if (
+            defender.ability == "wonderguard"
+            and defender.damage_multiplier(move.type) <= 1
+        ):
+            return 0.0
+
+        # 3. Item Checks (OTS Awareness)
+        item_bonus = 1.0
+        if attacker.item == "lifeorb":
+            item_bonus = 1.3
+        elif attacker.item == "choiceband" and move.category == MoveCategory.PHYSICAL:
+            item_bonus = 1.5
+        elif attacker.item == "choicespecs" and move.category == MoveCategory.SPECIAL:
+            item_bonus = 1.5
+
+        # 4. Calculation
+        base_power = move.base_power
+        # Technician Boost
+        if attacker.ability == "technician" and base_power <= 60:
+            base_power *= 1.5
+
+        # Standard Formula
+        level_factor = (2 * attacker.level) / 5 + 2
+        damage = ((level_factor * base_power * (atk / defense)) / 50 + 2) * 0.85
+
+        # Modifiers
+        stab = 1.5 if move.type in attacker.types else 1.0
+        type_eff = defender.damage_multiplier(move.type)
+
+        # Fixed Weather Modifiers logic
+        weather_name = "none"
+        if battle.weather:
+            # Access weather name safely from the battle object passed in
+            weather_name = next(iter(battle.weather)).name.lower()
+
+        if "rain" in weather_name:
+            if move.type == PokemonType.WATER:
+                damage *= 1.5
+            elif move.type == PokemonType.FIRE:
+                damage *= 0.5
+        elif "sun" in weather_name:
+            if move.type == PokemonType.FIRE:
+                damage *= 1.5
+            elif move.type == PokemonType.WATER:
+                damage *= 0.5
+
+        return damage * stab * type_eff * item_bonus
+
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        raise NotImplementedError
+
+    def get_switch_score(
+        self,
+        battle: AbstractBattle,
+        switch_mon: Pokemon,
+        active_mon: Pokemon,
+        opponent: Optional[Pokemon],
+    ) -> float:
+        return -50.0
 
 
 class RandomPlayer(Player):
@@ -24,78 +297,24 @@ class RandomPlayer(Player):
         return self.choose_random_move(battle)
 
 
-class MaxBasePowerPlayer(Player):
-    def choose_move(self, battle: AbstractBattle):
-        if self.format_is_doubles:
-            return self.choose_doubles_move(battle)  # type: ignore
-        else:
-            return self.choose_singles_move(battle)
+class MaxBasePowerPlayer(BaselinePlayer):
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        score = move.base_power
 
-    def choose_singles_move(self, battle: AbstractBattle):
-        if battle.available_moves:
-            best_move = max(battle.available_moves, key=lambda move: move.base_power)
-            return self.create_order(best_move)
-        return self.choose_random_move(battle)
+        # Refactor: Multiplier for type effectiveness
+        # If type immunity exists (0x damage), score drops to 0.
+        if defender:
+            effectiveness = defender.damage_multiplier(move.type)
+            score *= effectiveness
 
-    def choose_doubles_move(self, battle: DoubleBattle):
-        orders: List[SingleBattleOrder] = []
-        switched_in = None
+        # Boost spread moves in doubles
+        if isinstance(battle, DoubleBattle):
+            if move.target in {"allAdjacentFoes", "allAdjacent"}:
+                score *= 1.5
 
-        if any(battle.force_switch):
-            return self.choose_random_doubles_move(battle)
-
-        can_target_first_opponent = (
-            battle.opponent_active_pokemon[0]
-            and not battle.opponent_active_pokemon[0].fainted
-        )
-        can_target_second_opponent = (
-            battle.opponent_active_pokemon[1]
-            and not battle.opponent_active_pokemon[1].fainted
-        )
-        can_double_target = can_target_first_opponent and can_target_second_opponent
-
-        for mon, moves, switches in zip(
-            battle.active_pokemon, battle.available_moves, battle.available_switches
-        ):
-            switches = [s for s in switches if s != switched_in]
-
-            if not mon or mon.fainted:
-                orders.append(PassBattleOrder())
-                continue
-            elif not moves and switches:
-                mon_to_switch_in = random.choice(switches)
-                orders.append(SingleBattleOrder(mon_to_switch_in))
-                switched_in = mon_to_switch_in
-                continue
-            elif not moves:
-                orders.append(DefaultBattleOrder())
-                continue
-
-            def move_power_with_double_target(move):
-                if move.target in {Target.NORMAL, Target.ANY} or not can_double_target:
-                    return move.base_power
-                return move.base_power * 1.5
-
-            best_move = max(moves, key=move_power_with_double_target)
-
-            # randomly picks between the two opponents for normal move targeting
-            targets = battle.get_possible_showdown_targets(best_move, mon)
-            opp_targets = [
-                t
-                for t in targets
-                if t in {battle.OPPONENT_1_POSITION, battle.OPPONENT_2_POSITION}
-            ]
-            if opp_targets:
-                target = random.choice(opp_targets)
-            else:
-                target = random.choice(targets)
-
-            orders.append(SingleBattleOrder(best_move, move_target=target))
-
-        if orders[0] or orders[1]:
-            return DoubleBattleOrder(orders[0], orders[1])
-
-        return self.choose_random_move(battle)
+        return score
 
 
 class PseudoBattle(Battle):
@@ -125,430 +344,403 @@ class PseudoBattle(Battle):
         return self._opponent_active_pokemon
 
 
-class SimpleHeuristicsPlayer(Player):
+class SimpleHeuristicsPlayer(BaselinePlayer):
+    """
+    A port of the original SimpleHeuristics logic into the new BaselinePlayer structure.
+    """
+
     ENTRY_HAZARDS = {
         "spikes": SideCondition.SPIKES,
-        "stealhrock": SideCondition.STEALTH_ROCK,
+        "stealthrock": SideCondition.STEALTH_ROCK,
         "stickyweb": SideCondition.STICKY_WEB,
         "toxicspikes": SideCondition.TOXIC_SPIKES,
     }
-
     ANTI_HAZARDS_MOVES = {"rapidspin", "defog"}
 
-    SPEED_TIER_COEFICIENT = 0.1
-    HP_FRACTION_COEFICIENT = 0.4
-    SWITCH_OUT_MATCHUP_THRESHOLD = -2
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        score = 0.0
 
-    def _estimate_matchup(self, mon: Pokemon, opponent: Pokemon):
-        score = max([opponent.damage_multiplier(t) for t in mon.types if t is not None])
-        score -= max(
-            [mon.damage_multiplier(t) for t in opponent.types if t is not None]
-        )
-        if mon.base_stats["spe"] > opponent.base_stats["spe"]:
-            score += self.SPEED_TIER_COEFICIENT
-        elif opponent.base_stats["spe"] > mon.base_stats["spe"]:
-            score -= self.SPEED_TIER_COEFICIENT
+        # 1. Hazard Logic
+        if move.id in self.ENTRY_HAZARDS:
+            if self.ENTRY_HAZARDS[move.id] not in battle.opponent_side_conditions:
+                score += 200.0
 
-        score += mon.current_hp_fraction * self.HP_FRACTION_COEFICIENT
-        score -= opponent.current_hp_fraction * self.HP_FRACTION_COEFICIENT
+        if move.id in self.ANTI_HAZARDS_MOVES:
+            if battle.side_conditions:
+                score += 200.0
+
+        # 2. Setup Logic
+        if move.category == MoveCategory.STATUS and move.boosts:
+            if attacker.current_hp_fraction == 1.0:
+                score += 150.0
+
+        # 3. Offensive Logic
+        if move.base_power > 0:
+            # Physical/Special split estimation
+            atk_stat = "atk" if move.category == MoveCategory.PHYSICAL else "spa"
+            def_stat = "def" if move.category == MoveCategory.PHYSICAL else "spd"
+
+            # Simple ratio of stats
+            stat_ratio = attacker.base_stats[atk_stat] / (
+                defender.base_stats[def_stat] if defender else 100
+            )
+            effectiveness = defender.damage_multiplier(move.type) if defender else 1.0
+            accuracy = move.accuracy if move.accuracy is not True else 1.0
+
+            damage_heuristic = move.base_power * stat_ratio * effectiveness * accuracy
+            score += damage_heuristic
 
         return score
 
-    def _should_dynamax(self, battle: AbstractBattle, n_remaining_mons: int):
-        if battle.can_dynamax:
-            # Last full HP mon
-            if (
-                len([m for m in battle.team.values() if m.current_hp_fraction == 1])
-                == 1
-                and battle.active_pokemon.current_hp_fraction == 1
-            ):
-                return True
-            # Matchup advantage and full hp on full hp
-            if (
-                self._estimate_matchup(
-                    battle.active_pokemon, battle.opponent_active_pokemon
-                )
-                > 0
-                and battle.active_pokemon.current_hp_fraction == 1
-                and battle.opponent_active_pokemon.current_hp_fraction == 1
-            ):
-                return True
-            if n_remaining_mons == 1:
-                return True
-        return False
 
-    def _should_terastallize(self, battle: Battle, move: Move) -> bool:
-        active = battle.active_pokemon
-        opp_active = battle.opponent_active_pokemon
-        if (
-            not battle.can_tera
-            or not active
-            or not opp_active
-            or active.tera_type is None
-        ):
-            return False
-        offensive_tera_score = opp_active.damage_multiplier(move.type)
-        defensive_score = min(
-            [1 / (active.damage_multiplier(t) or 1 / 8) for t in opp_active.types]
-        )
-        defensive_tera_score = min(
-            [
-                1
-                / (
-                    t.damage_multiplier(
-                        active.tera_type, type_chart=active._data.type_chart
-                    )
-                    or 1 / 8
-                )
-                for t in opp_active.types
-            ]
-        )
-        return offensive_tera_score * (defensive_tera_score / defensive_score) > 1
-
-    def _should_switch_out(self, battle: AbstractBattle):
-        active = battle.active_pokemon
-        opponent = battle.opponent_active_pokemon
-        # If there is a decent switch in...
-        if [
-            m
-            for m in battle.available_switches
-            if self._estimate_matchup(m, opponent) > 0
-        ]:
-            # ...and a 'good' reason to switch out
-            if active.boosts["def"] <= -3 or active.boosts["spd"] <= -3:
-                return True
-            if (
-                active.boosts["atk"] <= -3
-                and active.stats["atk"] >= active.stats["spa"]
-            ):
-                return True
-            if (
-                active.boosts["spa"] <= -3
-                and active.stats["atk"] <= active.stats["spa"]
-            ):
-                return True
-            if (
-                self._estimate_matchup(active, opponent)
-                < self.SWITCH_OUT_MATCHUP_THRESHOLD
-            ):
-                return True
-        return False
-
-    def _stat_estimation(self, mon: Pokemon, stat: str):
-        # Stats boosts value
-        if mon.boosts[stat] > 1:
-            boost = (2 + mon.boosts[stat]) / 2
-        else:
-            boost = 2 / (2 - mon.boosts[stat])
-        return ((2 * mon.base_stats[stat] + 31) + 5) * boost
-
-    def choose_singles_move(self, battle: Battle) -> Tuple[SingleBattleOrder, float]:
-        # Main mons shortcuts
-        active = battle.active_pokemon
-        opponent = battle.opponent_active_pokemon
-
-        if active is None or opponent is None:
-            return self.choose_random_singles_move(battle), 0
-
-        # Rough estimation of damage ratio
-        physical_ratio = self._stat_estimation(active, "atk") / self._stat_estimation(
-            opponent, "def"
-        )
-        special_ratio = self._stat_estimation(active, "spa") / self._stat_estimation(
-            opponent, "spd"
-        )
-
-        if battle.available_moves and (
-            not self._should_switch_out(battle) or not battle.available_switches
-        ):
-            n_remaining_mons = len(
-                [m for m in battle.team.values() if m.fainted is False]
-            )
-            n_opp_remaining_mons = 6 - len(
-                [m for m in battle.opponent_team.values() if m.fainted is True]
-            )
-
-            # Entry hazard...
-            for move in battle.available_moves:
-                # ...setup
-                if (
-                    n_opp_remaining_mons >= 3
-                    and move.id in self.ENTRY_HAZARDS
-                    and self.ENTRY_HAZARDS[move.id]
-                    not in battle.opponent_side_conditions
-                ):
-                    return self.create_order(move), 0
-
-                # ...removal
-                elif (
-                    battle.side_conditions
-                    and move.id in self.ANTI_HAZARDS_MOVES
-                    and n_remaining_mons >= 2
-                ):
-                    return self.create_order(move), 0
-
-            # Setup moves
-            if (
-                active.current_hp_fraction == 1
-                and self._estimate_matchup(active, opponent) > 0
-            ):
-                for move in battle.available_moves:
-                    if (
-                        move.boosts
-                        and sum(move.boosts.values()) >= 2
-                        and move.target == "self"
-                        and min(
-                            [active.boosts[s] for s, v in move.boosts.items() if v > 0]
-                        )
-                        < 6
-                    ):
-                        return self.create_order(move), 0
-
-            move, score = max(
-                [
-                    (
-                        m,
-                        m.base_power
-                        * (1.5 if m.type in active.types else 1)
-                        * (
-                            physical_ratio
-                            if m.category == MoveCategory.PHYSICAL
-                            else special_ratio
-                        )
-                        * m.accuracy
-                        * m.expected_hits
-                        * opponent.damage_multiplier(m),
-                    )
-                    for m in battle.available_moves
-                ],
-                key=lambda x: x[1],
-            )
-            return (
-                self.create_order(
-                    move,
-                    dynamax=self._should_dynamax(battle, n_remaining_mons),
-                    terastallize=self._should_terastallize(battle, move),
-                ),
-                score,
-            )
-
-        if battle.available_switches:
-            switches: List[Pokemon] = battle.available_switches
-            return (
-                self.create_order(
-                    max(switches, key=lambda s: self._estimate_matchup(s, opponent))
-                ),
-                0,
-            )
-
-        return self.choose_random_singles_move(battle), 0
-
-    @staticmethod
-    def get_double_target_multiplier(battle: DoubleBattle, order: SingleBattleOrder):
-        can_target_first_opponent = (
-            battle.opponent_active_pokemon[0]
-            and not battle.opponent_active_pokemon[0].fainted
-        )
-        can_target_second_opponent = (
-            battle.opponent_active_pokemon[1]
-            and not battle.opponent_active_pokemon[1].fainted
-        )
-        can_double_target = can_target_first_opponent and can_target_second_opponent
-        return (
-            1
-            if not hasattr(order, "order")
-            or not isinstance(order.order, Move)
-            or order.order.target in {Target.NORMAL, Target.ANY}
-            or not can_double_target
-            else 1.5
-        )
-
-    def choose_move(self, battle: AbstractBattle):
-        if not isinstance(battle, DoubleBattle):
-            return self.choose_singles_move(battle)[0]  # type: ignore
-        orders: List[SingleBattleOrder] = []
-        for active_id in [0, 1]:
-            if (
-                battle.active_pokemon[active_id] is None
-                and not battle.available_switches[active_id]
-            ):
-                orders += [PassBattleOrder()]
-                continue
-            results = [
-                self.choose_singles_move(PseudoBattle(battle, active_id, opp_id))
-                for opp_id in [0, 1]
-            ]
-            possible_orders = [r[0] for r in results]
-            scores = [r[1] for r in results]
-            for order in possible_orders:
-                mon = battle.active_pokemon[active_id]
-                if (
-                    order is not None
-                    and hasattr(order, "order")
-                    and isinstance(order.order, Move)
-                    and mon is not None
-                ):
-                    target = [o for o in possible_orders].index(order) + 1
-                    possible_targets = battle.get_possible_showdown_targets(
-                        order.order, mon
-                    )
-                    if target not in possible_targets:
-                        target = possible_targets[0]
-                    order.move_target = target
-            scores = [
-                scores[i]
-                * self.get_double_target_multiplier(battle, possible_orders[i])
-                for i in [0, 1]
-            ]
-            orders += [
-                (
-                    max(results, key=lambda a: a[1])[0]
-                    if battle.force_switch != [[False, True], [True, False]][active_id]
-                    and not (
-                        len(battle.available_switches[active_id]) == 1
-                        and battle.force_switch == [True, True]
-                        and active_id == 1
-                    )
-                    else PassBattleOrder()
-                )
-            ]
-        joined_orders = DoubleBattleOrder.join_orders([orders[0]], [orders[1]])
-        if joined_orders:
-            return joined_orders[0]
-        else:
-            return DoubleBattleOrder(orders[0], DefaultBattleOrder())
-
-
-class AggressivePlayer(Player):
-    """Aggressive decision tree.
-
-    Prioritises high expected damage and setup moves that increase offensive
-    potential. Falls back to a random move if nothing obvious is available.
+class AggressivePlayer(BaselinePlayer):
+    """
+    Focuses on maximizing immediate damage and securing KOs.
+    Improvement: Uses actual damage formula estimation rather than just Base Power.
     """
 
-    def choose_move(self, battle: AbstractBattle):
-        if self.format_is_doubles:
-            # For doubles, fall back to RandomPlayer behavior for now
-            return RandomPlayer.choose_move(self, battle)  # type: ignore
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        # 1. Estimate Damage
+        damage = self.estimate_damage(move, attacker, defender, battle)
+        score = damage
 
-        # Singles
-        if battle.available_moves:
-            # Score moves by base power * accuracy * expected_hits * matchup
-            def score_move(m: Move):
-                matchup = battle.opponent_active_pokemon.damage_multiplier(m.type)
-                acc = getattr(m, "accuracy", 1.0) or 1.0
-                return (m.base_power or 0) * acc * m.expected_hits * matchup
+        # Calculate percentage damage
+        # We assume average bulk if we don't know exact HP
+        # A standard pokemon has roughly 150-180 HP at level 50, 300-400 at level 100.
+        # A safer check for "KO" is simply comparing relative damage.
 
-            best = max(battle.available_moves, key=score_move)
-            return self.create_order(best)
+        damage_absolute = self.estimate_damage(move, attacker, defender, battle)
 
-        # If no moves available, try a switch
-        if battle.available_switches:
-            # prefer Pokemon instances when switching
-            candidates: List[Pokemon] = [
-                s for s in battle.available_switches if isinstance(s, Pokemon)
-            ]
-            if candidates:
-                return self.create_order(random.choice(candidates))
-            return self.create_order(random.choice(battle.available_switches))
+        # We can't easily map absolute damage to HP fraction without knowing Max HP.
+        # HEURISTIC: Assume average max HP based on level.
+        level = defender.level or 100
+        avg_hp = (defender.base_stats["hp"] * 2 * level / 100) + level + 10
 
-        return DefaultBattleOrder()
+        if damage_absolute >= (avg_hp * defender.current_hp_fraction):
+            score += 1000.0
+
+        # 3. Speed Bias
+        # If we are faster and can hit hard, do it.
+        # If we are slower and low HP, prioritize priority moves.
+        my_speed = attacker.stats["spe"] or attacker.base_stats["spe"]
+        opp_speed = defender.base_stats["spe"]
+
+        if attacker.current_hp_fraction < 0.3 and my_speed < opp_speed:
+            if move.priority > 0 and damage > 0:
+                score += 500.0  # Desperation priority move
+
+        # 4. Accuracy Penalty
+        # Don't risk a 50% accuracy move unless it's the only way to win
+        if move.accuracy is not True:
+            score *= move.accuracy
+
+        # 5. Status Move Penalty
+        if move.category == MoveCategory.STATUS:
+            # Only use status if it sets up a sweep (Swords Dance)
+            if move.boosts and ("atk" in move.boosts or "spa" in move.boosts):
+                score = 50.0  # Moderate score, lower than a good attack
+            else:
+                score = 0.0
+
+        return score
 
 
-class DefensivePlayer(Player):
-    """Defensive decision tree.
-
-    Prioritises recovery and protection moves, and switches to counter poor
-    matchups. Otherwise selects safe / supportive moves.
+class DefensivePlayer(BaselinePlayer):
+    """
+    Focuses on survival, stalling, and chip damage.
+    Improvement: Checks immunities for status moves and switches out of bad matchups.
     """
 
     RECOVERY_MOVES = {
         "recover",
-        "softboiled",
         "roost",
+        "slackoff",
+        "softboiled",
         "wish",
-        "healorder",
-        "synthesis",
+        "protect",
         "moonlight",
-        "horecl",
+        "synthesis",
+    }
+    STATUS_MOVES = {
+        "thunderwave",
+        "willowisp",
+        "toxic",
+        "yawn",
+        "hypnosis",
+        "sleeppowder",
     }
 
-    def choose_move(self, battle: AbstractBattle):
-        if self.format_is_doubles:
-            return RandomPlayer.choose_move(self, battle)  # type: ignore
+    def get_switch_score(
+        self,
+        battle: AbstractBattle,
+        switch_mon: Pokemon,
+        active_mon: Pokemon,
+        opponent: Optional[Pokemon],
+    ) -> float:
+        # If active pokemon is about to die or type disadvantaged, switch
+        if not opponent:
+            return -50.0
 
-        # Prefer recovery/protect moves
-        for m in battle.available_moves:
-            if getattr(m, "id", "") in self.RECOVERY_MOVES:
-                return self.create_order(m)
+        # Check current matchup
+        # If opponent has a move that is 4x effective against us
+        # Note: We can't see opponent moves easily, so we check Type Matchup of opponent types vs our types
+        defensive_multiplier = 1.0
+        for type_ in opponent.types:
+            defensive_multiplier *= active_mon.damage_multiplier(type_)
 
-        # If matchup is poor, try to switch to a better mon
-        active = battle.active_pokemon
-        opp = battle.opponent_active_pokemon
-        if active and opp:
-            # use a small internal estimator to decide whether to switch
-            try:
-                score = self._estimate_matchup(active, opp)
-            except Exception:
-                score = 0
+        if defensive_multiplier >= 2.0:
+            # We are weak to them. Check if switch_mon is better.
+            switch_def_mult = 1.0
+            for type_ in opponent.types:
+                switch_def_mult *= switch_mon.damage_multiplier(type_)
 
-            if score < -0.5 and battle.available_switches:
-                # Guard against typechecker confusion: ensure switch candidates
-                # are Pokemon instances before passing to _estimate_matchup.
-                candidates: List[Pokemon] = [
-                    s for s in battle.available_switches if isinstance(s, Pokemon)
-                ]
-                if candidates:
-                    best_switch = max(
-                        candidates, key=lambda s: self._estimate_matchup(s, opp)
-                    )
-                    return self.create_order(best_switch)
+            if switch_def_mult < defensive_multiplier:
+                return 200.0  # High priority to switch to a resist
 
-        # Otherwise pick the move with best defensive utility (status / stall)
-        status_moves = [
-            m for m in battle.available_moves if m.category == MoveCategory.STATUS
-        ]
-        if status_moves:
-            return self.create_order(random.choice(status_moves))
+        return -50.0
 
-        # Fallback: best damaging move
-        if battle.available_moves:
-            best = max(
-                battle.available_moves,
-                key=lambda m: (m.base_power or 0) * (m.expected_hits or 1),
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        score = 0.0
+
+        # 1. Recovery Logic
+        if move.id in self.RECOVERY_MOVES:
+            hp = attacker.current_hp_fraction
+            if hp < 0.3:
+                return 2000.0  # Critical range
+            if hp < 0.7:
+                return 500.0  # Maintenance
+            return -10.0  # Don't heal if full
+
+        # 2. Status Logic (Smart)
+        if move.id in self.STATUS_MOVES:
+            if not defender or defender.status is not None:
+                return -50.0  # Don't status again
+
+            # Type Immunities check
+            if (
+                move.type == PokemonType.ELECTRIC
+                and PokemonType.GROUND in defender.types
+            ):
+                return -50.0
+            if move.type == PokemonType.POISON and (
+                PokemonType.STEEL in defender.types
+                or PokemonType.POISON in defender.types
+            ):
+                return -50.0
+            if move.id == "willowisp" and PokemonType.FIRE in defender.types:
+                return -50.0
+            if move.type == PokemonType.GRASS and PokemonType.GRASS in defender.types:
+                return -50.0
+            if move.id == "protect":
+
+                # Check if we used protect last turn (requires tracking state,
+                # but simpler heuristic: don't use if high HP)
+                if attacker.current_hp_fraction > 0.9:
+                    return (
+                        -50.0
+                    )  # Don't protect if full HP (stalling usually requires toxic/burn)
+                # If we could track last_move, we would add that here.
+                # Without state tracking, at least lower the score so it's not 2000.0 always.
+                return 100.0
+
+            return 300.0
+
+        # 3. Chip Damage (Attacking)
+        if move.base_power > 0:
+            damage = self.estimate_damage(move, attacker, defender, battle)
+            # Defensive players prefer reliable damage over high risk
+            score = damage * (
+                move.accuracy if isinstance(move.accuracy, float) else 1.0
             )
-            return self.create_order(best)
 
-        if battle.available_switches:
-            candidates: List[Pokemon] = [
-                s for s in battle.available_switches if isinstance(s, Pokemon)
-            ]
-            if candidates:
-                return self.create_order(random.choice(candidates))
-            return self.create_order(random.choice(battle.available_switches))
+            # Bonus for draining moves
+            if "drain" in move.id or move.id in [
+                "gigadrain",
+                "drainpunch",
+                "hornleech",
+            ]:
+                score *= 1.5
 
-        return DefaultBattleOrder()
+        return score
 
-    def _estimate_matchup(self, mon: Pokemon, opponent: Pokemon):
-        """Small heuristic to estimate matchup advantage for DefensivePlayer.
 
-        Positive means favorable for `mon`, negative means unfavorable.
-        """
-        try:
-            score = max(
-                [opponent.damage_multiplier(t) for t in mon.types if t is not None]
-            )
-            score -= max(
-                [mon.damage_multiplier(t) for t in opponent.types if t is not None]
-            )
-            # speed advantage adds small bonus
-            if mon.base_stats["spe"] > opponent.base_stats["spe"]:
-                score += 0.1
-            elif opponent.base_stats["spe"] > mon.base_stats["spe"]:
-                score -= 0.1
-            # health fraction contribution
-            score += mon.current_hp_fraction * 0.2
-            score -= opponent.current_hp_fraction * 0.2
-            return score
-        except Exception:
-            return 0
+class SetupSweeperPlayer(BaselinePlayer):
+    """
+    NEW PLAYER TYPE: Setup Sweeper.
+    Prioritizes boosting stats early, then sweeping with high damage moves.
+    """
+
+    SETUP_MOVES = {
+        "swordsdance",
+        "nastyplot",
+        "dragondance",
+        "quiverdance",
+        "calmmind",
+        "shellsmash",
+        "curse",
+        "bulkup",
+    }
+
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        score = 0.0
+
+        # 1. Setup Logic
+        # Boost if healthy and not already boosted too high
+        is_boosted = sum(val for key, val in attacker.boosts.items() if val > 0) >= 2
+
+        if move.id in self.SETUP_MOVES:
+            if attacker.current_hp_fraction > 0.6 and not is_boosted:
+                return 1000.0  # Top priority
+            return 0.0
+
+        # 2. Attack Logic
+        if move.base_power > 0:
+            damage = self.estimate_damage(move, attacker, defender, battle)
+            score = damage
+
+            # If we are boosted, we really want to attack
+            if is_boosted:
+                score *= 1.5
+
+        return score
+
+
+class SpeedControlPlayer(BaselinePlayer):
+    """
+    NEW PLAYER TYPE: Speed Control (Doubles Specialist).
+    Prioritizes Trick Room, Tailwind, or Icy Wind to control turn order.
+    """
+
+    SPEED_MOVES = {"trickroom", "tailwind", "icywind", "electroweb", "stringshot"}
+
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        score = 0.0
+
+        # 1. Field Control
+        if move.id == "trickroom":
+            # Use TR if we are slow and it's not up
+            field = getattr(battle, "field", None)
+            trick_room_active = field.trick_room_is_active if field else False
+
+            if not trick_room_active and attacker.base_stats["spe"] < 80:
+                return 2000.0
+            return -100.0
+
+        if move.id == "tailwind":
+            if "tailwind" not in battle.side_conditions:
+                return 2000.0
+            return -100.0
+
+        # 2. Speed Dropping Moves
+        if move.id in ["icywind", "electroweb"]:
+            return 500.0  # Good spread spam in doubles
+
+        # 3. Fallback to Damage
+        if move.base_power > 0:
+            return self.estimate_damage(move, attacker, defender, battle)
+
+        return score
+
+
+class WeatherWarriorPlayer(BaselinePlayer):
+    WEATHER_MOVES = {"raindance", "sunnyday", "sandstorm", "hail", "snowscape"}
+    WEATHER_ABILITIES = {"drizzle", "drought", "sandstream", "snowwarning"}
+
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        score = 0.0
+
+        # We take the first key from the dictionary if it exists
+        current_weather = next(iter(battle.weather)).name if battle.weather else "NONE"
+
+        # If we have a weather move and weather is not ours/neutral, prioritize setting it
+        if move.id in self.WEATHER_MOVES:
+            # Assuming we want Rain if we have Rain Dance
+            wanted_weather = move.weather
+            if current_weather != wanted_weather:
+                return 500.0
+
+        # 2. Weather Exploitation
+        damage = self.estimate_damage(move, attacker, defender, battle)
+
+        if "rain" in current_weather.lower():
+            if move.type == PokemonType.WATER:
+                damage *= 1.5
+            elif move.type == PokemonType.FIRE:
+                damage *= 0.5
+            if move.id == "thunder":
+                damage *= 1.3  # Accuracy boost bonus
+
+        elif "sun" in current_weather.lower():
+            if move.type == PokemonType.FIRE:
+                damage *= 1.5
+            elif move.type == PokemonType.WATER:
+                damage *= 0.5
+            if move.id == "solarbeam":
+                damage *= 1.5  # No charge turn
+
+        return damage
+
+
+class DisruptorPlayer(BaselinePlayer):
+    DISRUPTION_MOVES = {"taunt", "encore", "disable", "torment", "yawn"}
+
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        score = 0.0
+
+        if not defender:
+            return 0.0
+
+        # Priority: Disrupt first
+        if move.id in self.DISRUPTION_MOVES:
+            # Logic: Don't Taunt if already Taunted
+            if move.id == "taunt" and "taunt" not in defender.effects:
+                # Value Taunt highly against passive mons (Status moves known?)
+                return 400.0
+
+            if move.id == "encore":
+                # Only Encore if they used a non-damaging or weak move last turn
+                # Note: Poke-env might not easily track "last move used" without keeping state
+                # But we can try randomly spamming it if we don't know
+                if defender.status is None:
+                    return 300.0
+
+            if move.id == "yawn" and not defender.status:
+                return 350.0
+
+        # Fallback: Attack with STAB or Coverage
+        damage = self.estimate_damage(move, attacker, defender, battle)
+        return damage
+
+
+class ChoiceTricksterPlayer(BaselinePlayer):
+    TRICK_MOVES = {"trick", "switcheroo"}
+    CHOICE_ITEMS = {"choiceband", "choicespecs", "choicescarf"}
+
+    def get_move_score(
+        self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
+    ) -> float:
+        # Check if we are holding a choice item and have Trick
+        if move.id in self.TRICK_MOVES:
+            if attacker.item in self.CHOICE_ITEMS:
+                # If opponent is NOT holding a choice item or crystal
+                # And opponent seems defensive (low offensive stats or used status moves)
+                if defender.item not in self.CHOICE_ITEMS and "z" not in str(
+                    defender.item
+                ):
+                    return 1000.0  # High Priority to cripple walls
+
+        return self.estimate_damage(move, attacker, defender, battle)

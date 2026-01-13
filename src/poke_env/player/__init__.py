@@ -7,6 +7,11 @@ from poke_env.player.baselines import (
     SimpleHeuristicsPlayer,
     AggressivePlayer,
     DefensivePlayer,
+    SetupSweeperPlayer,
+    SpeedControlPlayer,
+    WeatherWarriorPlayer,
+    DisruptorPlayer,
+    ChoiceTricksterPlayer,
 )
 from poke_env.player.battle_order import (
     BattleOrder,
@@ -44,4 +49,9 @@ __all__ = [
     "SimpleHeuristicsPlayer",
     "AggressivePlayer",
     "DefensivePlayer",
+    "SetupSweeperPlayer",
+    "SpeedControlPlayer",
+    "WeatherWarriorPlayer",
+    "DisruptorPlayer",
+    "ChoiceTricksterPlayer",
 ]
