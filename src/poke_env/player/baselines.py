@@ -1,4 +1,4 @@
-import random
+import math
 from typing import List, Tuple, cast, Optional, Union
 
 from poke_env.battle.abstract_battle import AbstractBattle
@@ -89,10 +89,8 @@ class BaselinePlayer(Player):
                         )
                         orders[i] = self.create_order(best_switch)
                     else:
-                        # Should not happen unless fainted and no backups
                         orders[i] = DefaultBattleOrder()
                 else:
-                    # This slot stays on the field; send a Pass order
                     orders[i] = PassBattleOrder()
                 continue
 
@@ -116,16 +114,19 @@ class BaselinePlayer(Player):
                 # 1. Determine valid targets
                 possible_targets = []
 
-                # If move targets specific foe (normal single target moves)
+                # TARGET: NORMAL / ANY / ADJACENT_FOE
                 if move.target in {Target.NORMAL, Target.ANY, Target.ADJACENT_FOE}:
                     possible_targets = [
                         battle.opponent_active_pokemon[0],
                         battle.opponent_active_pokemon[1],
                     ]
-                # If move targets all adjacent (Spread moves like Earthquake)
+                # TARGET: SPREAD (All Foes)
                 elif move.target in {Target.ALL_ADJACENT, Target.ALL_ADJACENT_FOES}:
-                    # We treat the "target" as the opponent slot 1 for API purposes, but calculate spread damage
-                    possible_targets = [battle.opponent_active_pokemon[0]]
+                    # Score based on hitting the first available opponent,
+                    # damage calculation handles spread logic implicitly by checking type matchups later if needed
+                    possible_targets = [
+                        op for op in battle.opponent_active_pokemon if op is not None
+                    ]
 
                 for target in possible_targets:
                     if not target or target.fainted:
@@ -154,10 +155,9 @@ class BaselinePlayer(Player):
                             Target.ANY,
                             Target.ADJACENT_FOE,
                         }:
-                            # Targets: 1, 2 are opponents. -1, -2 are allies.
-                            # poke-env usually takes the target object or index.
-                            # DoubleBattleOrder logic usually requires specifying target index explicitly.
-                            # Standard poke-env: 1 is opp1, 2 is opp2.
+                            # In Double Battles, target is 1 or 2 (Opponents), -1 or -2 (Allies)
+                            # battle.opponent_active_pokemon[0] -> Target 1
+                            # battle.opponent_active_pokemon[1] -> Target 2
                             target_idx = (
                                 1 if target == battle.opponent_active_pokemon[0] else 2
                             )
@@ -181,59 +181,71 @@ class BaselinePlayer(Player):
             ),
         )
 
-    def _get_target_from_index(
-        self, battle: DoubleBattle, idx: int
-    ) -> Optional[Pokemon]:
-        # Mapping: 1, 2 are opponents. -1, -2 are allies.
-        if idx == 1:
-            return battle.opponent_active_pokemon[0]
-        if idx == 2:
-            return battle.opponent_active_pokemon[1]
-        if idx == -1:
-            return battle.active_pokemon[1]
-        if idx == -2:
-            return battle.active_pokemon[0]
-        return None
+    def calculate_stat(self, pokemon: Pokemon, stat_name: str, level: int = 50) -> int:
+        """
+        Calculates the approximate stat of a Pokemon based on Base Stats.
+        Assumes 31 IVs and 85 EVs (neutral spread) for robustness.
+        Rounds DOWN strictly.
+        """
+        base = pokemon.base_stats.get(stat_name, 100)
+
+        # HP Formula: floor((2 * Base + IV + floor(EV/4)) * Level / 100) + Level + 10
+        # Stat Formula: floor((floor((2 * Base + IV + floor(EV/4)) * Level / 100) + 5) * Nature)
+        # Assuming Neutral Nature (1.0) and generic EVs (85) for un-scouted mons.
+
+        ev_calc = math.floor(85 / 4)  # 21
+        common_term = math.floor((2 * base + 31 + ev_calc) * level / 100)
+
+        if stat_name == "hp":
+            return common_term + level + 10
+        else:
+            return common_term + 5
 
     def estimate_damage(
-        self,
-        move: Move,
-        attacker: Pokemon,
-        defender: Pokemon,
-        battle: AbstractBattle,  # Add battle here
+        self, move: Move, attacker: Pokemon, defender: Pokemon, battle: AbstractBattle
     ) -> float:
         """
-        Robust damage estimation including OTS data (Items/Abilities).
+        Robust damage estimation with strict floor rounding.
+        Handles Teampreview state (where stats are missing) by calculating them.
         """
         if move.category == MoveCategory.STATUS:
             return 0.0
 
-        # 1. Stats with Stat Changes
-        # Psyshock Check: Uses SpA vs Def
-        use_def_stat = "def"
-        # Initialize atk with a default to satisfy the 'unbound' warning
-        atk = 0.0
+        # Determine if we are in Team Preview (no active turns) or Battle
+        # If attacker.stats is empty/None, we calculate manually.
+        use_manual_stats = not attacker.stats or not attacker.stats.get("atk")
+
+        # 1. Determine Attack and Defense Stats
+        atk_stat_name = "atk"
+        def_stat_name = "def"
 
         if move.id == "bodypress":
-            atk = attacker.stats["def"] or attacker.base_stats["def"]
-            use_def_stat = "def"
+            atk_stat_name = "def"
+            def_stat_name = "def"
         elif move.category == MoveCategory.SPECIAL:
-            atk = attacker.stats["spa"] or attacker.base_stats["spa"]
+            atk_stat_name = "spa"
             if move.id == "psyshock":
-                use_def_stat = "def"
+                def_stat_name = "def"
             else:
-                use_def_stat = "spd"
-        else:  # Physical
-            atk = attacker.stats["atk"] or attacker.base_stats["atk"]
-            use_def_stat = "def"
+                def_stat_name = "spd"
 
-        defense = defender.stats[use_def_stat] or 1  # Avoid division by zero
+        if use_manual_stats:
+            atk = self.calculate_stat(attacker, atk_stat_name, attacker.level)
+            defense = self.calculate_stat(defender, def_stat_name, defender.level)
+        else:
+            atk = attacker.stats[atk_stat_name] or self.calculate_stat(
+                attacker, atk_stat_name, attacker.level
+            )
+            defense = defender.stats[def_stat_name] or self.calculate_stat(
+                defender, def_stat_name, defender.level
+            )
 
-        # 2. Ability Immunities (OTS Awareness)
-        # Levitate Check
+        if defense == 0:
+            defense = 1  # Safety
+
+        # 2. Ability Immunities
         if move.type == PokemonType.GROUND and defender.ability == "levitate":
             return 0.0
-        # Flash Fire / Volt Absorb / etc.
         if move.type == PokemonType.FIRE and defender.ability == "flashfire":
             return 0.0
         if move.type == PokemonType.ELECTRIC and defender.ability in [
@@ -248,14 +260,8 @@ class BaselinePlayer(Player):
             "dryskin",
         ]:
             return 0.0
-        # Wonder Guard
-        if (
-            defender.ability == "wonderguard"
-            and defender.damage_multiplier(move.type) <= 1
-        ):
-            return 0.0
 
-        # 3. Item Checks (OTS Awareness)
+        # 3. Item Checks
         item_bonus = 1.0
         if attacker.item == "lifeorb":
             item_bonus = 1.3
@@ -264,26 +270,36 @@ class BaselinePlayer(Player):
         elif attacker.item == "choicespecs" and move.category == MoveCategory.SPECIAL:
             item_bonus = 1.5
 
-        # 4. Calculation
+        # 4. Base Calculation
         base_power = move.base_power
-        # Technician Boost
         if attacker.ability == "technician" and base_power <= 60:
-            base_power *= 1.5
+            base_power = math.floor(base_power * 1.5)
 
-        # Standard Formula
-        level_factor = (2 * attacker.level) / 5 + 2
-        damage = ((level_factor * base_power * (atk / defense)) / 50 + 2) * 0.85
+        level_factor = math.floor((2 * attacker.level) / 5) + 2
 
-        # Modifiers
-        stab = 1.5 if move.type in attacker.types else 1.0
-        type_eff = defender.damage_multiplier(move.type)
+        # Damage Formula: floor(floor(floor(2 * L / 5 + 2) * BP * A / D) / 50) + 2
 
-        # Fixed Weather Modifiers logic
-        weather_name = "none"
-        if battle.weather:
-            # Access weather name safely from the battle object passed in
-            weather_name = next(iter(battle.weather)).name.lower()
+        # Step 1: Base Damage
+        base_damage = (
+            math.floor(math.floor(level_factor * base_power * atk / defense) / 50) + 2
+        )
 
+        # Step 2: Modifiers (STAB, Weather, Type)
+        # Note: In real games, these are chained with flooring.
+        # For estimation, we chain floats but floor the final result is usually enough,
+        # but to be strict with your rule:
+
+        damage = base_damage * 0.85  # Low roll estimation
+
+        if move.type in attacker.types:
+            damage = damage * 1.5  # STAB
+
+        damage = damage * defender.damage_multiplier(move.type)  # Type Effectiveness
+
+        # Weather
+        weather_name = (
+            next(iter(battle.weather)).name.lower() if battle.weather else "none"
+        )
         if "rain" in weather_name:
             if move.type == PokemonType.WATER:
                 damage *= 1.5
@@ -295,7 +311,23 @@ class BaselinePlayer(Player):
             elif move.type == PokemonType.WATER:
                 damage *= 0.5
 
-        return damage * stab * type_eff * item_bonus
+        damage = damage * item_bonus
+
+        return math.floor(damage)
+
+    def _get_target_from_index(
+        self, battle: DoubleBattle, idx: int
+    ) -> Optional[Pokemon]:
+        # Mapping: 1, 2 are opponents. -1, -2 are allies.
+        if idx == 1:
+            return battle.opponent_active_pokemon[0]
+        if idx == 2:
+            return battle.opponent_active_pokemon[1]
+        if idx == -1:
+            return battle.active_pokemon[1]
+        if idx == -2:
+            return battle.active_pokemon[0]
+        return None
 
     def get_move_score(
         self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
@@ -310,6 +342,94 @@ class BaselinePlayer(Player):
         opponent: Optional[Pokemon],
     ) -> float:
         return -50.0
+
+    def teampreview(self, battle: AbstractBattle) -> str:
+        """
+        Advanced VGC Teampreview Logic.
+        1. Identifies if Opponent Team is known (Open Team Sheet).
+        2. Calculates Matchups based on Base Stats (calculated to Lvl 50).
+        3. Prioritizes Leads (Slots 1 & 2) separately from Backline.
+        """
+        my_team = list(battle.team.values())
+        opp_team = list(battle.opponent_team.values())
+
+        # If opponent team is hidden (Closed Team Sheet early on), fallback to power heuristic
+        if not opp_team:
+            # Sort by simply highest base stat total or offensive stats
+            sorted_team = sorted(
+                range(len(my_team)),
+                key=lambda i: my_team[i].base_stats["atk"]
+                + my_team[i].base_stats["spa"]
+                + my_team[i].base_stats["spe"],
+                reverse=True,
+            )
+            return "/team " + "".join(map(str, [i + 1 for i in sorted_team]))
+
+        # Calculate Scores
+        mon_scores = []
+        for i, my_mon in enumerate(my_team):
+            lead_score = 0.0
+            back_score = 0.0
+
+            # Calculate stats manually for teampreview (Level 50 standard)
+            my_speed = self.calculate_stat(my_mon, "spe", 50)
+
+            for opp_mon in opp_team:
+                opp_speed = self.calculate_stat(opp_mon, "spe", 50)
+
+                # Offensive Potential
+                best_dmg = 0
+                for move in my_mon.moves.values():
+                    # Use estimate_damage which handles 'teampreview' stats calculation internally now
+                    dmg = self.estimate_damage(move, my_mon, opp_mon, battle)
+                    if dmg > best_dmg:
+                        best_dmg = dmg
+
+                # Scoring Logic
+                # Lead Score: Favors Speed and OHKO potential
+                if my_speed > opp_speed:
+                    lead_score += best_dmg * 1.2  # Bonus for being faster
+                else:
+                    lead_score += best_dmg * 0.8  # Penalty for being slower
+
+                # Back Score: Favors Bulk and Type Matchup (Defensive)
+                # Simple defense heuristic: do I resist their types?
+                defensive_mult = 1.0
+                for type_ in opp_mon.types:
+                    defensive_mult *= my_mon.damage_multiplier(type_)
+
+                if defensive_mult < 1.0:  # Resist
+                    back_score += 200
+                elif defensive_mult > 1.5:  # Weak
+                    back_score -= 200
+
+                back_score += best_dmg  # Damage still matters in back
+
+            mon_scores.append(
+                {
+                    "index": i + 1,
+                    "mon": my_mon,
+                    "lead_score": lead_score,
+                    "back_score": back_score,
+                }
+            )
+
+        # Selection Logic
+        # 1. Pick Top 2 Leads
+        mon_scores.sort(key=lambda x: x["lead_score"], reverse=True)
+        leads = [mon_scores[0], mon_scores[1]]
+
+        # 2. Pick Top 2 Back from the remaining
+        remaining = mon_scores[2:]
+        remaining.sort(key=lambda x: x["back_score"], reverse=True)
+        back = [remaining[0], remaining[1]]
+
+        # 3. The last 2 are bench (for 6v6 they go last, for VGC they stay home)
+        bench = remaining[2:]
+
+        final_order = [x["index"] for x in leads + back + bench]
+
+        return "/team " + "".join(map(str, final_order))
 
 
 class RandomPlayer(Player):

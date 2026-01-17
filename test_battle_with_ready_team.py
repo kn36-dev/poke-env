@@ -20,7 +20,9 @@ import time
 import random
 from typing import List
 
-from teams_config import ALL_TEAMS
+from gen1_teams_config import ALL_TEAMS
+
+# from teams_config import ALL_TEAMS
 
 # ServerConfiguration for a local Showdown running on localhost:8000
 SERVER_CONFIG = ServerConfiguration(
