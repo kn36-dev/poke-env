@@ -27,6 +27,7 @@ class BaselinePlayer(Player):
     """
 
     def choose_move(self, battle: AbstractBattle) -> BattleOrder:
+        print(f"\n--- Turn {battle.turn} [{self.__class__.__name__}] ---")
         if isinstance(battle, DoubleBattle):
             return self._choose_doubles_move(battle)
         elif isinstance(battle, Battle):
@@ -41,8 +42,16 @@ class BaselinePlayer(Player):
         best_score = -float("inf")
         best_order = self.choose_random_move(battle)
 
+        active = battle.active_pokemon
+        opponent = battle.opponent_active_pokemon
+
+        print(
+            f"Active: {active.species} vs Opponent: {opponent.species if opponent else 'None'}"
+        )
+
         # Evaluate Switches
         if battle.available_switches:
+            print("  [Switch Analysis]")
             for switch_mon in battle.available_switches:
                 score = self.get_switch_score(
                     battle,
@@ -50,19 +59,24 @@ class BaselinePlayer(Player):
                     battle.active_pokemon,
                     battle.opponent_active_pokemon,
                 )
+                print(f"    > Switch to {switch_mon.species}: Score {score:.1f}")
                 if score > best_score:
                     best_score = score
                     best_order = self.create_order(switch_mon)
+                    print(f"      -> New Best Action: Switch to {switch_mon.species}")
 
         # Evaluate Moves
         if battle.available_moves and battle.opponent_active_pokemon:
+            print("  [Move Analysis]")
             for move in battle.available_moves:
                 score = self.get_move_score(
                     battle, move, battle.active_pokemon, battle.opponent_active_pokemon
                 )
+                print(f"    > Move {move.id}: Score {score:.1f}")
                 if score > best_score:
                     best_score = score
                     best_order = self.create_order(move)
+                    print(f"      -> New Best Action: {move.id}")
 
         return best_order
 
@@ -71,6 +85,8 @@ class BaselinePlayer(Player):
         is_force_switch = any(battle.force_switch)
         orders: List[Optional[BattleOrder]] = [None, None]
 
+        print(f"  [Doubles Logic] Force Switch: {is_force_switch}")
+
         # Iterate through both active pokemon (0 and 1)
         for i in range(2):
             attacker = battle.active_pokemon[i]
@@ -78,14 +94,20 @@ class BaselinePlayer(Player):
                 orders[i] = DefaultBattleOrder()
                 continue
 
+            print(f"  Analysing Slot {i+1}: {attacker.species}")
+
             # 2. Handle Force-Switch Phase
             if is_force_switch:
                 if battle.force_switch[i]:
+                    print(f"    Slot {i+1} MUST switch.")
                     # This slot MUST switch
                     if battle.available_switches[i]:
                         best_switch = max(
                             battle.available_switches[i],
                             key=lambda p: p.current_hp_fraction,
+                        )
+                        print(
+                            f"    > Forced Switch: Choosing {best_switch.species} (Highest HP)"
                         )
                         orders[i] = self.create_order(best_switch)
                     else:
@@ -103,6 +125,9 @@ class BaselinePlayer(Player):
                     best_switch = max(
                         battle.available_switches[i],
                         key=lambda p: p.current_hp_fraction,
+                    )
+                    print(
+                        f"    No moves available. Panic switching to {best_switch.species}"
                     )
                     orders[i] = self.create_order(best_switch)
                 else:
@@ -135,6 +160,10 @@ class BaselinePlayer(Player):
                     # Calculate Score
                     current_score = self.get_move_score(battle, move, attacker, target)
 
+                    # LOGGING
+                    target_idx = 1 if target == battle.opponent_active_pokemon[0] else 2
+                    log_msg = f"    > Move {move.id} vs Opp{target_idx} ({target.species}): Raw Score {current_score:.1f}"
+
                     # FRIENDLY FIRE CHECK
                     if move.target == Target.ALL_ADJACENT:
                         # This move (e.g., Earthquake) hits our partner too!
@@ -144,11 +173,18 @@ class BaselinePlayer(Player):
                             ff_damage = self.estimate_damage(
                                 move, attacker, partner, battle
                             )
-                            # Subtract massive penalty if it hurts partner significantly
-                            current_score -= ff_damage * 1.5
+                            penalty = ff_damage * 1.5
+                            current_score -= penalty
+                            log_msg += f" (Friendly Fire Penalty: -{penalty:.1f})"
+
+                    print(log_msg)
 
                     if current_score > best_score:
                         best_score = current_score
+                        print(
+                            f"      -> New Best for Slot {i+1}: {move.id} targeting Opp{target_idx}"
+                        )
+
                         # If targeting is required, specify it
                         if move.target in {
                             Target.NORMAL,
@@ -350,11 +386,13 @@ class BaselinePlayer(Player):
         2. Calculates Matchups based on Base Stats (calculated to Lvl 50).
         3. Prioritizes Leads (Slots 1 & 2) separately from Backline.
         """
+        print(f"\n--- Team Preview [{self.__class__.__name__}] ---")
         my_team = list(battle.team.values())
         opp_team = list(battle.opponent_team.values())
 
         # If opponent team is hidden (Closed Team Sheet early on), fallback to power heuristic
         if not opp_team:
+            print("  Opponent team is hidden. Falling back to stat heuristic.")
             # Sort by simply highest base stat total or offensive stats
             sorted_team = sorted(
                 range(len(my_team)),
@@ -373,6 +411,8 @@ class BaselinePlayer(Player):
 
             # Calculate stats manually for teampreview (Level 50 standard)
             my_speed = self.calculate_stat(my_mon, "spe", 50)
+
+            print(f"  Evaluating {my_mon.species} (Spd: {my_speed})...")
 
             for opp_mon in opp_team:
                 opp_speed = self.calculate_stat(opp_mon, "spe", 50)
@@ -405,6 +445,8 @@ class BaselinePlayer(Player):
 
                 back_score += best_dmg  # Damage still matters in back
 
+            print(f"    -> Lead Score: {lead_score:.1f}, Back Score: {back_score:.1f}")
+
             mon_scores.append(
                 {
                     "index": i + 1,
@@ -427,6 +469,9 @@ class BaselinePlayer(Player):
         # 3. The last 2 are bench (for 6v6 they go last, for VGC they stay home)
         bench = remaining[2:]
 
+        print(f"  Selected Leads: {leads[0]['mon'].species}, {leads[1]['mon'].species}")
+        print(f"  Selected Back: {back[0]['mon'].species}, {back[1]['mon'].species}")
+
         final_order = [x["index"] for x in leads + back + bench]
 
         return "/team " + "".join(map(str, final_order))
@@ -434,6 +479,7 @@ class BaselinePlayer(Player):
 
 class RandomPlayer(Player):
     def choose_move(self, battle: AbstractBattle) -> BattleOrder:
+        print("[RandomPlayer] Picking random move.")
         return self.choose_random_move(battle)
 
 
@@ -448,11 +494,15 @@ class MaxBasePowerPlayer(BaselinePlayer):
         if defender:
             effectiveness = defender.damage_multiplier(move.type)
             score *= effectiveness
+            print(
+                f"    [MaxBP] {move.id} BP: {move.base_power} x Eff: {effectiveness} = {score}"
+            )
 
         # Boost spread moves in doubles
         if isinstance(battle, DoubleBattle):
             if move.target in {"allAdjacentFoes", "allAdjacent"}:
                 score *= 1.5
+                print(f"    [MaxBP] Boosted Spread Move: {score}")
 
         return score
 
@@ -506,15 +556,18 @@ class SimpleHeuristicsPlayer(BaselinePlayer):
         if move.id in self.ENTRY_HAZARDS:
             if self.ENTRY_HAZARDS[move.id] not in battle.opponent_side_conditions:
                 score += 200.0
+                print(f"    [Heuristic] Setting Hazard {move.id} (+200)")
 
         if move.id in self.ANTI_HAZARDS_MOVES:
             if battle.side_conditions:
                 score += 200.0
+                print(f"    [Heuristic] Clearing Hazards with {move.id} (+200)")
 
         # 2. Setup Logic
         if move.category == MoveCategory.STATUS and move.boosts:
             if attacker.current_hp_fraction == 1.0:
                 score += 150.0
+                print(f"    [Heuristic] Boosting safely at Full HP (+150)")
 
         # 3. Offensive Logic
         if move.base_power > 0:
@@ -531,6 +584,9 @@ class SimpleHeuristicsPlayer(BaselinePlayer):
 
             damage_heuristic = move.base_power * stat_ratio * effectiveness * accuracy
             score += damage_heuristic
+            print(
+                f"    [Heuristic] Damage Est: {damage_heuristic:.1f} (Ratio {stat_ratio:.1f} * Eff {effectiveness})"
+            )
 
         return score
 
@@ -544,26 +600,35 @@ class AggressivePlayer(BaselinePlayer):
     def get_move_score(
         self, battle: AbstractBattle, move: Move, attacker: Pokemon, defender: Pokemon
     ) -> float:
-        # 1. Estimate Damage
+        # 1. Estimate Damage (Calculate only once for efficiency)
         damage = self.estimate_damage(move, attacker, defender, battle)
         score = damage
 
-        # Calculate percentage damage
-        # We assume average bulk if we don't know exact HP
-        # A standard pokemon has roughly 150-180 HP at level 50, 300-400 at level 100.
-        # A safer check for "KO" is simply comparing relative damage.
+        # 2. KO Detection (Heuristic)
+        # We assume average bulk if we don't know exact HP.
+        if defender.current_hp_fraction < 1.0:
+            # Heuristic: Calculate Average HP
+            level = defender.level or 100
 
-        damage_absolute = self.estimate_damage(move, attacker, defender, battle)
+            # USER INSTRUCTION: Stats calculation must be rounded down.
+            # Formula: ((2 * Base + IV + EV/4) * Level / 100) + Level + 10
+            # Simplified Average: ((2 * HP_Base) * Level / 100) + Level + 10
+            estimated_max_hp = (
+                math.floor((defender.base_stats["hp"] * 2 * level) / 100) + level + 10
+            )
 
-        # We can't easily map absolute damage to HP fraction without knowing Max HP.
-        # HEURISTIC: Assume average max HP based on level.
-        level = defender.level or 100
-        avg_hp = (defender.base_stats["hp"] * 2 * level / 100) + level + 10
+            # Round down the current HP estimation as well
+            current_hp_absolute = math.floor(
+                estimated_max_hp * defender.current_hp_fraction
+            )
 
-        if damage_absolute >= (avg_hp * defender.current_hp_fraction):
-            score += 1000.0
+            if damage >= current_hp_absolute:
+                score += 1000.0
+                print(
+                    f"    [Aggro] {move.id} KO detected on {defender.species} (Est. Dmg: {damage} vs HP: {current_hp_absolute})"
+                )
 
-        # 3. Speed Bias
+        # 3. Speed Bias & Desperation
         # If we are faster and can hit hard, do it.
         # If we are slower and low HP, prioritize priority moves.
         my_speed = attacker.stats["spe"] or attacker.base_stats["spe"]
@@ -572,11 +637,14 @@ class AggressivePlayer(BaselinePlayer):
         if attacker.current_hp_fraction < 0.3 and my_speed < opp_speed:
             if move.priority > 0 and damage > 0:
                 score += 500.0  # Desperation priority move
+                print(f"    [Aggro] Desperation Priority Move: {move.id} (+500)")
 
         # 4. Accuracy Penalty
-        # Don't risk a 50% accuracy move unless it's the only way to win
-        if move.accuracy is not True:
-            score *= move.accuracy
+        # Fix: Convert integer accuracy (e.g., 85) to percentage (0.85)
+        # Your previous code did score *= 85, making inaccurate moves scored 100x higher than intended.
+        if move.accuracy is not True and isinstance(move.accuracy, (int, float)):
+            accuracy_mod = move.accuracy / 100.0
+            score *= accuracy_mod
 
         # 5. Status Move Penalty
         if move.category == MoveCategory.STATUS:
@@ -632,13 +700,18 @@ class DefensivePlayer(BaselinePlayer):
         for type_ in opponent.types:
             defensive_multiplier *= active_mon.damage_multiplier(type_)
 
+        print(f"    [DefensiveSwitch] Curr Matchup Weakness: {defensive_multiplier}")
+
         if defensive_multiplier >= 2.0:
             # We are weak to them. Check if switch_mon is better.
             switch_def_mult = 1.0
             for type_ in opponent.types:
                 switch_def_mult *= switch_mon.damage_multiplier(type_)
 
+            print(f"      -> {switch_mon.species} Weakness: {switch_def_mult}")
+
             if switch_def_mult < defensive_multiplier:
+                print(f"      -> Switching to resist! (+200)")
                 return 200.0  # High priority to switch to a resist
 
         return -50.0
@@ -652,8 +725,10 @@ class DefensivePlayer(BaselinePlayer):
         if move.id in self.RECOVERY_MOVES:
             hp = attacker.current_hp_fraction
             if hp < 0.3:
+                print(f"    [Defensive] Critical HP! Using {move.id} (+2000)")
                 return 2000.0  # Critical range
             if hp < 0.7:
+                print(f"    [Defensive] Maintenance heal with {move.id} (+500)")
                 return 500.0  # Maintenance
             return -10.0  # Don't heal if full
 
@@ -667,6 +742,7 @@ class DefensivePlayer(BaselinePlayer):
                 move.type == PokemonType.ELECTRIC
                 and PokemonType.GROUND in defender.types
             ):
+                print(f"    [Defensive] Opponent immune to {move.id} (Ground)")
                 return -50.0
             if move.type == PokemonType.POISON and (
                 PokemonType.STEEL in defender.types
@@ -687,8 +763,10 @@ class DefensivePlayer(BaselinePlayer):
                     )  # Don't protect if full HP (stalling usually requires toxic/burn)
                 # If we could track last_move, we would add that here.
                 # Without state tracking, at least lower the score so it's not 2000.0 always.
+                print(f"    [Defensive] Stalling with Protect")
                 return 100.0
 
+            print(f"    [Defensive] Crippling opponent with {move.id} (+300)")
             return 300.0
 
         # 3. Chip Damage (Attacking)
@@ -706,6 +784,7 @@ class DefensivePlayer(BaselinePlayer):
                 "hornleech",
             ]:
                 score *= 1.5
+                print(f"    [Defensive] Draining move bonus: {score}")
 
         return score
 
@@ -738,7 +817,10 @@ class SetupSweeperPlayer(BaselinePlayer):
 
         if move.id in self.SETUP_MOVES:
             if attacker.current_hp_fraction > 0.6 and not is_boosted:
+                print(f"    [Sweeper] Healthy enough to setup {move.id} (+1000)")
                 return 1000.0  # Top priority
+
+            print(f"    [Sweeper] Skipping setup (HP Low or Boosted)")
             return 0.0
 
         # 2. Attack Logic
@@ -749,6 +831,7 @@ class SetupSweeperPlayer(BaselinePlayer):
             # If we are boosted, we really want to attack
             if is_boosted:
                 score *= 1.5
+                print(f"    [Sweeper] Attacking while boosted! {score}")
 
         return score
 
@@ -773,16 +856,19 @@ class SpeedControlPlayer(BaselinePlayer):
             trick_room_active = field.trick_room_is_active if field else False
 
             if not trick_room_active and attacker.base_stats["spe"] < 80:
+                print(f"    [SpeedControl] Setting Trick Room for slow team (+2000)")
                 return 2000.0
             return -100.0
 
         if move.id == "tailwind":
             if "tailwind" not in battle.side_conditions:
+                print(f"    [SpeedControl] Setting Tailwind (+2000)")
                 return 2000.0
             return -100.0
 
         # 2. Speed Dropping Moves
         if move.id in ["icywind", "electroweb"]:
+            print(f"    [SpeedControl] Spreading Speed Drops (+500)")
             return 500.0  # Good spread spam in doubles
 
         # 3. Fallback to Damage
@@ -809,6 +895,7 @@ class WeatherWarriorPlayer(BaselinePlayer):
             # Assuming we want Rain if we have Rain Dance
             wanted_weather = move.weather
             if current_weather != wanted_weather:
+                print(f"    [Weather] Changing weather to {wanted_weather} (+500)")
                 return 500.0
 
         # 2. Weather Exploitation
@@ -817,6 +904,7 @@ class WeatherWarriorPlayer(BaselinePlayer):
         if "rain" in current_weather.lower():
             if move.type == PokemonType.WATER:
                 damage *= 1.5
+                print(f"    [Weather] Rain boosting Water move: {damage}")
             elif move.type == PokemonType.FIRE:
                 damage *= 0.5
             if move.id == "thunder":
@@ -825,6 +913,7 @@ class WeatherWarriorPlayer(BaselinePlayer):
         elif "sun" in current_weather.lower():
             if move.type == PokemonType.FIRE:
                 damage *= 1.5
+                print(f"    [Weather] Sun boosting Fire move: {damage}")
             elif move.type == PokemonType.WATER:
                 damage *= 0.5
             if move.id == "solarbeam":
@@ -849,16 +938,18 @@ class DisruptorPlayer(BaselinePlayer):
             # Logic: Don't Taunt if already Taunted
             if move.id == "taunt" and "taunt" not in defender.effects:
                 # Value Taunt highly against passive mons (Status moves known?)
+                print(f"    [Disruptor] Taunting {defender.species} (+400)")
                 return 400.0
 
-            if move.id == "encore":
+            if move.id == "encore" and defender.status is None:
                 # Only Encore if they used a non-damaging or weak move last turn
                 # Note: Poke-env might not easily track "last move used" without keeping state
                 # But we can try randomly spamming it if we don't know
-                if defender.status is None:
-                    return 300.0
+                print(f"    [Disruptor] Encoring {defender.species} (+300)")
+                return 300.0
 
             if move.id == "yawn" and not defender.status:
+                print(f"    [Disruptor] Yawning {defender.species} (+350)")
                 return 350.0
 
         # Fallback: Attack with STAB or Coverage
@@ -881,6 +972,9 @@ class ChoiceTricksterPlayer(BaselinePlayer):
                 if defender.item not in self.CHOICE_ITEMS and "z" not in str(
                     defender.item
                 ):
+                    print(
+                        f"    [Trickster] Tricking Choice item onto {defender.species} (+1000)"
+                    )
                     return 1000.0  # High Priority to cripple walls
 
         return self.estimate_damage(move, attacker, defender, battle)

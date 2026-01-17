@@ -311,6 +311,325 @@ Jolly Nature
 - Rock Slide  
 - Icicle Spear  
 - Wide Guard  
+
+===
+
+Cloud King (Golduck) @ Life Orb  
+Ability: Cloud Nine  
+Fusion: Nidoking  
+EVs: 252 SpA / 4 SpD / 252 Spe  
+Modest Nature  
+- Earth Power  
+- Hydro Pump  
+- Ice Beam  
+- Protect  
+
+Dragon Shell (Lapras) @ Assault Vest  
+Ability: Shell Armor  
+Fusion: Cloyster  
+EVs: 252 HP / 252 SpA / 4 SpD  
+Quiet Nature  
+- Freeze-Dry  
+- Sparkling Aria  
+- Chilling Water  
+- Ice Shard  
+
+Solar Flare (Arcanine) @ Rocky Helmet  
+Ability: Intimidate  
+Fusion: Exeggutor  
+EVs: 252 HP / 252 Def / 4 SpA  
+Bold Nature  
+- Will-O-Wisp  
+- Giga Drain  
+- Flamethrower  
+- Morning Sun  
+
+Shock Bat (Zapdos) @ Focus Sash  
+Ability: Static  
+Fusion: Gengar  
+EVs: 4 HP / 252 SpA / 252 Spe  
+Timid Nature  
+- Thunderbolt  
+- Shadow Ball  
+- Tailwind  
+- Volt Switch  
+
+Iron Fist (Machamp) @ Leftovers  
+Ability: No Guard  
+Fusion: Snorlax  
+EVs: 252 HP / 252 Atk / 4 SpD  
+Adamant Nature  
+- Dynamic Punch  
+- Facade  
+- Knock Off  
+- Heavy Slam  
+
+Aero Blade (Aerodactyl) @ Choice Band  
+Ability: Rock Head  
+Fusion: Scyther  
+EVs: 4 HP / 252 Atk / 252 Spe  
+Jolly Nature  
+- Stone Edge  
+- Close Combat  
+- U-turn  
+- Dual Wingbeat  
+
+===
+
+Rain Dancer (Poliwrath) @ Damp Rock
+Ability: Drizzle
+Fusion: Pelipper
+EVs: 252 HP / 252 Def / 4 SpA
+Bold Nature
+- Weather Ball
+- Hurricane
+- Helping Hand
+- Protect
+
+Sandy Shrewd (Sandslash) @ Thick Club
+Ability: Sand Rush
+Fusion: Marowak
+EVs: 252 HP / 252 Atk / 4 SpD
+Brave Nature
+IVs: 0 Spe
+- Bonemerang
+- Knock Off
+- Stone Edge
+- Swords Dance
+
+Mind Muscle (Slowbro) @ Mental Herb
+Ability: Oblivious
+Fusion: Machamp
+EVs: 252 HP / 252 Def / 4 SpD
+Relaxed Nature
+IVs: 0 Spe
+- Trick Room
+- Scald
+- Close Combat
+- Heal Pulse
+
+Star Power (Starmie) @ Life Orb
+Ability: Natural Cure
+Fusion: Exeggutor
+EVs: 252 SpA / 4 SpD / 252 Spe
+Timid Nature
+- Hydro Pump
+- Energy Ball
+- Psychic
+- Ice Beam
+
+Heavy Slumber (Snorlax) @ Eviolite
+Ability: Thick Fat
+Fusion: Rhydon
+EVs: 252 HP / 252 Atk / 4 Def
+Brave Nature
+IVs: 0 Spe
+- Body Slam
+- High Horsepower
+- Rock Slide
+- Curse
+
+Gassy Ghost (Gengar) @ Black Sludge
+Ability: Levitate
+Fusion: Weezing
+EVs: 252 HP / 252 SpA / 4 SpD
+Quiet Nature
+IVs: 0 Spe
+- Shadow Ball
+- Sludge Bomb
+- Haze
+- Will-O-Wisp
+
+===
+
+Molten Mutt (Growlithe) @ Eviolite  
+Ability: Flash Fire  
+Fusion: Flareon  
+EVs: 252 HP / 252 Atk / 4 SpD  
+Adamant Nature  
+- Flare Blitz  
+- Quick Attack  
+- Will-O-Wisp  
+- Helping Hand  
+
+King Shell (Nidoking) @ Life Orb  
+Ability: Sheer Force  
+Fusion: Blastoise  
+EVs: 252 SpA / 4 SpD / 252 Spe  
+Modest Nature  
+- Sludge Bomb  
+- Muddy Water  
+- Ice Beam  
+- Earth Power  
+
+Boulder Bird (Pidgeot) @ Choice Band  
+Ability: Rock Head  
+Fusion: Golem  
+EVs: 252 HP / 252 Atk / 4 SpD  
+Brave Nature  
+- Stone Edge  
+- Brave Bird  
+- U-turn  
+- Earthquake  
+
+Zen Flower (Exeggutor) @ Focus Sash  
+Ability: Chlorophyll  
+Fusion: Venusaur  
+EVs: 4 HP / 252 SpA / 252 Spe  
+Modest Nature  
+- Solar Beam  
+- Psychic  
+- Sludge Bomb  
+- Sleep Powder  
+
+Sparky Tail (Raichu) @ Assault Vest  
+Ability: Inner Focus  
+Fusion: Dragonite  
+EVs: 252 HP / 252 Atk / 4 SpD  
+Adamant Nature  
+- Nuzzle  
+- Dragon Claw  
+- Wild Charge  
+- Extreme Speed  
+
+Mystic Sea (Vaporeon) @ Leftovers  
+Ability: Clear Body  
+Fusion: Tentacruel  
+EVs: 252 HP / 252 Def / 4 SpD  
+Bold Nature  
+- Scald  
+- Acid Armor  
+- Toxic Spikes  
+- Protect  
+
+===
+Cloud Nine-Tails (Golduck) @ Heavy-Duty Boots  
+Ability: Cloud Nine  
+Fusion: Ninetales  
+EVs: 252 HP / 4 SpA / 252 Spe  
+Timid Nature  
+- Scald  
+- Overheat  
+- Encore  
+- Disable  
+
+Fossil Fire (Aerodactyl) @ White Herb  
+Ability: Intimidate  
+Fusion: Arcanine  
+EVs: 4 HP / 252 Atk / 252 Spe  
+Jolly Nature  
+- Rock Slide  
+- Flare Blitz  
+- Wide Guard  
+- Tailwind  
+
+Swamp King (Venusaur) @ Life Orb  
+Ability: Chlorophyll  
+Fusion: Nidoking  
+EVs: 252 SpA / 4 SpD / 252 Spe  
+Modest Nature  
+- Earth Power  
+- Energy Ball  
+- Sludge Bomb  
+- Protect  
+
+Iron Mind (Alakazam) @ Focus Sash  
+Ability: Magic Guard  
+Fusion: Magneton  
+EVs: 4 HP / 252 SpA / 252 Spe  
+Timid Nature  
+- Flash Cannon  
+- Psychic  
+- Expanding Force  
+- Trick Room  
+
+Dragon Parasite (Dragonite) @ Leftovers  
+Ability: Multiscale  
+Fusion: Parasect  
+EVs: 252 HP / 252 Atk / 4 SpD  
+Adamant Nature  
+- Rage Powder  
+- Dragon Claw  
+- Seed Bomb  
+- Roost  
+
+Shadow Star (Gengar) @ Choice Specs  
+Ability: Cursed Body  
+Fusion: Starmie  
+EVs: 4 HP / 252 SpA / 252 Spe  
+Timid Nature  
+IVs: 0 Atk  
+- Shadow Ball  
+- Hydro Pump  
+- Icy Wind  
+- Thunderbolt  
+
+===
+
+Earthquake King (Rhydon) @ Eviolite  
+Ability: Rock Head  
+Fusion: Nidoking  
+EVs: 252 HP / 252 Atk / 4 SpD  
+Brave Nature  
+IVs: 0 Spe  
+- High Horsepower  
+- Poison Jab  
+- Rock Slide  
+- Megahorn  
+
+Solar Flare-on (Ninetales) @ Heat Rock  
+Ability: Flash Fire  
+Fusion: Flareon  
+EVs: 252 Atk / 4 SpD / 252 Spe  
+Jolly Nature  
+- Flare Blitz  
+- Will-O-Wisp  
+- Quick Attack  
+- Howl  
+
+Sandy Sea (Vaporeon) @ Leftovers  
+Ability: Water Absorb  
+Fusion: Sandslash  
+EVs: 252 HP / 252 Def / 4 SpA  
+Bold Nature  
+- Scald  
+- Earth Power  
+- Wish  
+- Protect  
+
+Bone Breaker (Marowak) @ Thick Club  
+Ability: No Guard  
+Fusion: Machamp  
+EVs: 252 HP / 252 Atk / 4 SpD  
+Brave Nature  
+IVs: 0 Spe  
+- Dynamic Punch  
+- Earthquake  
+- Stone Edge  
+- Knock Off  
+
+Psycho Drill (Alakazam) @ Focus Sash  
+Ability: Magic Guard  
+Fusion: Dugtrio  
+EVs: 4 HP / 252 SpA / 252 Spe  
+Timid Nature  
+- Expanding Force  
+- Earth Power  
+- Shadow Ball  
+- Protect  
+
+Iron Golem (Golem) @ Air Balloon  
+Ability: Sturdy  
+Fusion: Magneton  
+EVs: 252 HP / 252 SpA / 4 SpD  
+Quiet Nature  
+IVs: 0 Atk / 0 Spe  
+- Flash Cannon  
+- Ancient Power  
+- Earth Power  
+- Wide Guard  
+
+
 """
 
 ALL_TEAMS = [team.strip() for team in RAW_TEAMS_DATA.split("===") if team.strip()]

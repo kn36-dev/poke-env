@@ -1,5 +1,5 @@
 from poke_env.player import (
-    RandomPlayer,
+    # RandomPlayer,
     MaxBasePowerPlayer,
     SimpleHeuristicsPlayer,
     AggressivePlayer,
@@ -64,7 +64,7 @@ def main():
     args = parser.parse_args()
 
     player_types = [
-        RandomPlayer,
+        # RandomPlayer,
         MaxBasePowerPlayer,
         SimpleHeuristicsPlayer,
         AggressivePlayer,
