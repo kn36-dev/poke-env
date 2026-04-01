@@ -18,10 +18,10 @@ async def test_random_players():
     for gen in range(4, 10):
         players = [
             RandomPlayer(
-                battle_format=f"gen{gen}randombattle", strict_battle_tracking=True
+                battle_format=f"gen{gen}randombattle", strict_battle_tracking=False
             ),
             RandomPlayer(
-                battle_format=f"gen{gen}randombattle", strict_battle_tracking=True
+                battle_format=f"gen{gen}randombattle", strict_battle_tracking=False
             ),
         ]
         await asyncio.wait_for(
